@@ -1,11 +1,11 @@
 package main
 
 import (
-	"lab4/shared"
-	"lab4/raft"
-	// "lab4/mapreduce"
 	"encoding/gob"
 	"fmt"
+	"lab4/mapreduce"
+	"lab4/raft"
+	"lab4/shared"
 	"math/rand"
 	"net/rpc"
 	"os"
@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	MAX_NODES   = 8
-	X_TIME      = 10
-	Y_TIME      = 20
-	Z_TIME_MAX  = 200
-	Z_TIME_MIN  = 30
+	MAX_NODES  = 8
+	X_TIME     = 10
+	Y_TIME     = 20
+	Z_TIME_MAX = 200
+	Z_TIME_MIN = 30
 )
 
 var wg = &sync.WaitGroup{}
@@ -67,13 +67,13 @@ func readMessages(server *rpc.Client, id int) []interface{} {
 
 func detectFailures(membership *shared.Membership) {
 	currTime := calcTime()
-	
+
 	// Get a copy of the members to avoid concurrent map access
 	localCopy := make(map[int]shared.Node)
 	for id, val := range membership.Members {
 		localCopy[id] = val
 	}
-	
+
 	// Process the copy
 	for _, val := range localCopy {
 		if !val.Alive {
@@ -86,7 +86,6 @@ func detectFailures(membership *shared.Membership) {
 		}
 	}
 }
-
 
 // RequestVotes for candidate calling on them
 func requestVote(server *rpc.Client, args shared.RequestVote) bool {
@@ -139,23 +138,23 @@ func voteResponse(resp shared.RequestVoteResp) {
 	}
 
 	// fmt.Printf("Node %d: Received vote response for term %d role %s and vote %s\n", self_node.ID, resp.Term, role, resp.Vote)
-	
+
 	// Only count votes if still a candidate
 	if role == raft.RoleCandidate && resp.Vote {
 		votes++
-		
+
 		fmt.Printf("Node %d: Total votes: %d\n", self_node.ID, votes)
 
 		// If we have majority, become leader
 		if votes > MAX_NODES/2 {
-		// if votes == 2 {
+			// if votes == 2 {
 			if role != raft.RoleCandidate {
 				return
 			}
-			
+
 			role = raft.RoleLeader
 			fmt.Printf("Node %d: Became leader for term %d\n", self_node.ID, currentTerm)
-			
+
 			// Stop election timer as leaders don't timeout
 			if raft_timer != nil {
 				raft_timer.Stop()
@@ -168,7 +167,7 @@ func voteResponse(resp shared.RequestVoteResp) {
 func resetElectionTimer(server *rpc.Client) {
 	// Create a random election timeout (between 150-300ms)
 	// electionTimeout := time.Duration(150+rand.Intn(150)) * time.Millisecond
-	electionTimeout = time.Duration(raft.RAFT_X_TIME + rand.Intn(raft.RAFT_Y_MAX) + raft.RAFT_Y_MIN) * time.Millisecond
+	electionTimeout = time.Duration(raft.RAFT_X_TIME+rand.Intn(raft.RAFT_Y_MAX)+raft.RAFT_Y_MIN) * time.Millisecond
 
 	// Reset voted for and all other variables to default to start a new election
 	// votes = 0
@@ -180,7 +179,7 @@ func resetElectionTimer(server *rpc.Client) {
 	if raft_timer != nil {
 		raft_timer.Stop()
 	}
-	
+
 	raft_timer = time.AfterFunc(electionTimeout, func() {
 		startElection(server)
 	})
@@ -195,16 +194,16 @@ func startElection(server *rpc.Client) {
 	if role == raft.RoleLeader {
 		return
 	}
-	
+
 	// Increment term and vote for self
 	currentTerm++
 	myID := self_node.ID
 	votedFor = &myID
 	role = raft.RoleCandidate
 	votes = 1 // Vote for self
-	
+
 	fmt.Printf("Node %d: Starting election for term %d\n", myID, currentTerm)
-	
+
 	// Request votes from all nodes
 	for i := 1; i <= MAX_NODES; i++ {
 		if i == myID {
@@ -218,7 +217,7 @@ func startElection(server *rpc.Client) {
 		}
 		sendMessage(server, i, voteReq)
 	}
-	
+
 	// Reset election timeout in case we don't get majority
 	resetElectionTimer(server)
 }
@@ -228,12 +227,12 @@ func sendHeartbeats(server *rpc.Client) {
 	if role != raft.RoleLeader {
 		return
 	}
-	
+
 	for i := 1; i <= MAX_NODES; i++ {
 		if i == self_node.ID {
 			continue // Skip self
 		}
-		
+
 		heartbeat := shared.LeaderHeartbeat{
 			Term:     currentTerm,
 			LeaderId: self_node.ID,
@@ -248,7 +247,7 @@ func handleLeaderHeartbeat(server *rpc.Client, heartbeat shared.LeaderHeartbeat)
 	if heartbeat.Term < currentTerm {
 		return
 	}
-	
+
 	// If new term or valid heartbeat from current term
 	if heartbeat.Term >= currentTerm {
 		// Update term if needed
@@ -256,14 +255,14 @@ func handleLeaderHeartbeat(server *rpc.Client, heartbeat shared.LeaderHeartbeat)
 			currentTerm = heartbeat.Term
 			votedFor = nil
 		}
-		
+
 		// Reset to follower (even if already follower)
 		role = raft.RoleFollower
-		
+
 		// Reset election timer
 		resetElectionTimer(server)
-		
-		fmt.Printf("Node %d: Received heartbeat from leader %d (term %d)\n", 
+
+		fmt.Printf("Node %d: Received heartbeat from leader %d (term %d)\n",
 			self_node.ID, heartbeat.LeaderId, heartbeat.Term)
 	}
 }
@@ -380,7 +379,7 @@ func runAfterZ(server *rpc.Client, id int) {
 	fmt.Printf("Node %d: Crashed\n", id)
 	fmt.Printf("Heartbeat Counter: %d\n", self_node.Hbcounter)
 	fmt.Printf("Time: %v\n", self_node.Time)
-	
+
 	// FIX: Use a Node pointer for the reply instead of a bool
 	var reply shared.Node
 	err := server.Call("Membership.Update", self_node, &reply)
@@ -395,7 +394,7 @@ func runAfterZ(server *rpc.Client, id int) {
 
 func printMembership(m shared.Membership) {
 	for i := range MAX_NODES {
-		var val, exists = m.Members[i + 1]
+		var val, exists = m.Members[i+1]
 		if exists {
 			status := "is Alive"
 			if !val.Alive {
