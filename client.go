@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/gob"
 	"fmt"
-	"lab4/mapreduce"
+	// "lab4/mapreduce"
 	"lab4/raft"
 	"lab4/shared"
 	"math/rand"
@@ -21,6 +21,8 @@ const (
 	Z_TIME_MAX = 200
 	Z_TIME_MIN = 30
 )
+
+var FILES = [...]string{"data/pg-being_ernest.txt", "data/pg-metamorphosis.txt"}
 
 var wg = &sync.WaitGroup{}
 var membership_lock = sync.RWMutex{}
@@ -89,7 +91,7 @@ func detectFailures(membership *shared.Membership) {
 
 // RequestVotes for candidate calling on them
 func requestVote(server *rpc.Client, args shared.RequestVote) bool {
-	fmt.Println("Node %d: Received vote request from %d with term %d\n", self_node.ID, args.CandidateId, args.Term)
+	fmt.Printf("Node %d: Received vote request from %d with term %d\n", self_node.ID, args.CandidateId, args.Term)
 	// fmt.Printf("Recieved vote request from %d with term %d, current %d, votedFor %s\n", args.CandidateId, args.Term, currentTerm, votedFor)
 	// Check if the term is valid
 	if args.Term < currentTerm {
@@ -117,7 +119,7 @@ func requestVote(server *rpc.Client, args shared.RequestVote) bool {
 	intVar := args.CandidateId
 	votedFor = &intVar
 	// voteGranted = true
-	fmt.Println("Node %d: Granted vote to %d for term %d\n", self_node.ID, args.CandidateId, currentTerm)
+	fmt.Printf("Node %d: Granted vote to %d for term %d\n", self_node.ID, args.CandidateId, currentTerm)
 	// fmt.Printf("Granted vote request from %d with term %d, current %d, votedFor %s\n", args.CandidateId, args.Term, currentTerm, *votedFor)
 
 	resetElectionTimer(server)
@@ -140,7 +142,7 @@ func voteResponse(resp shared.RequestVoteResp) {
 	// fmt.Printf("Node %d: Received vote response for term %d role %s and vote %s\n", self_node.ID, resp.Term, role, resp.Vote)
 
 	// Only count votes if still a candidate
-	if role == raft.RoleCandidate && resp.Vote {
+	if role == raft.RoleCandidate && currentTerm == resp.Term && resp.Vote {
 		votes++
 
 		fmt.Printf("Node %d: Total votes: %d\n", self_node.ID, votes)
