@@ -1,9 +1,5 @@
 package raft
 
-import (
-	"lab4/shared"
-)
-
 type Role int
 
 const (
@@ -16,10 +12,6 @@ const (
 	RAFT_Y_MAX  = 300
 	RAFT_Z_TIME = 250
 )
-
-type GossipHeartbeat struct {
-	Membership shared.Membership
-}
 
 type RequestVote struct {
 	Term        int

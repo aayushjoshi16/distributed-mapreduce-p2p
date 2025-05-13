@@ -1,23 +1,24 @@
 package main
 
 import (
+	"lab4/gossip"
 	"lab4/shared"
 	// "lab4/mapreduce"
-	"fmt"
 	"encoding/gob"
+	"fmt"
 	"net/http"
 	"net/rpc"
 )
 
 func main() {
 	// create a Membership list
-	nodes := shared.NewMembership()
+	nodes := gossip.NewMembership()
 	requests := shared.NewRequests()
 
 	// register nodes with `rpc.DefaultServer`
-	rpc.Register(nodes)
+	rpc.Register(&nodes)
 	rpc.Register(requests)
-	gob.Register(shared.Membership{})
+	gob.Register(gossip.Membership{})
 	gob.Register(shared.GossipHeartbeat{})
 	gob.Register(shared.RequestVote{})
 	gob.Register(shared.RequestVoteResp{})

@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/gob"
 	"fmt"
+
 	// "lab4/mapreduce"
+	"lab4/gossip"
 	"lab4/raft"
 	"lab4/shared"
 	"math/rand"
@@ -15,11 +17,11 @@ import (
 )
 
 const (
-	MAX_NODES  = 8
-	X_TIME     = 10
-	Y_TIME     = 20
-	Z_TIME_MAX = 200
-	Z_TIME_MIN = 30
+	MAX_NODES     = 8
+	POLL_INTERVAL = 10
+	Y_TIME        = 20
+	Z_TIME_MAX    = 200
+	Z_TIME_MIN    = 30
 )
 
 var FILES = [...]string{"data/pg-being_ernest.txt", "data/pg-metamorphosis.txt"}
@@ -31,7 +33,7 @@ var role raft.Role = raft.RoleFollower
 var currentTerm int = 0
 var votedFor *int = nil
 var leaderID *int = nil
-var self_node shared.Node
+var self_node gossip.Node
 var votes int = 0
 var electionTimeout time.Duration
 
@@ -67,11 +69,11 @@ func readMessages(server *rpc.Client, id int) []interface{} {
 	return reply
 }
 
-func detectFailures(membership *shared.Membership) {
+func detectFailures(membership *gossip.Membership) {
 	currTime := calcTime()
 
 	// Get a copy of the members to avoid concurrent map access
-	localCopy := make(map[int]shared.Node)
+	localCopy := make(map[int]gossip.Node)
 	for id, val := range membership.Members {
 		localCopy[id] = val
 	}
@@ -81,7 +83,7 @@ func detectFailures(membership *shared.Membership) {
 		if !val.Alive {
 			continue
 		}
-		if currTime.After(val.Time.Add(shared.FAIL_TIMEOUT * time.Second)) {
+		if currTime.After(val.Time.Add(gossip.FAIL_TIMEOUT * time.Second)) {
 			// Mark as dead
 			val.Alive = false
 			// fmt.Printf("Node %d: Marked as Dead\n", val.ID)
@@ -269,14 +271,27 @@ func handleLeaderHeartbeat(server *rpc.Client, heartbeat shared.LeaderHeartbeat)
 	}
 }
 
+type ClientState struct {
+	id         int
+	membership gossip.Membership
+}
+
+func NewState(id int, self_node gossip.Node) ClientState {
+	membership := gossip.NewMembership()
+	membership.Add(self_node, nil)
+
+	return ClientState{
+		id:         id,
+		membership: membership,
+	}
+}
+
 func main() {
-	gob.Register(shared.Membership{})
+	gob.Register(gossip.Membership{})
 	gob.Register(shared.GossipHeartbeat{})
 	gob.Register(shared.RequestVote{})
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
-
-	Z_TIME := (rand.Intn(Z_TIME_MAX-Z_TIME_MIN) + Z_TIME_MIN)
 
 	// Connect to RPC server
 	server, _ := rpc.DialHTTP("tcp", "localhost:9005")
@@ -293,14 +308,11 @@ func main() {
 		fmt.Println("Found Error", err)
 	}
 
-	fmt.Println("Node", id, "will fail after", Z_TIME, "seconds")
-
-	currTime := calcTime()
 	// Construct self
-	self_node = shared.Node{
+	self_node = gossip.Node{
 		ID:        id,
 		Hbcounter: 0,
-		Time:      currTime,
+		Time:      time.Now(),
 		Alive:     true,
 	}
 
@@ -311,56 +323,34 @@ func main() {
 		fmt.Printf("Success: Node created with id= %d\n", id)
 	}
 
-	neighbors := self_node.InitializeNeighbors(id)
-	fmt.Println("Neighbors:", neighbors)
-
-	membership := shared.NewMembership()
-	membership.Update(self_node, nil)
-
-	sendMessage(server, neighbors[0], *membership)
+	state := NewState(id, self_node)
 
 	role = raft.RoleFollower
 	resetElectionTimer(server)
 
-	// crashTime := self_node.CrashTime()
-	// raft_timer = time.AfterFunc(RAFT_X_TIME*time.Second + shared.RandomLeadTimeout(), func() { startLeaderCheck(server, &self_node, id) })
-
-	time.AfterFunc(time.Millisecond*X_TIME, func() { runAfterX(server, &self_node, &membership, id) })
-	time.AfterFunc(time.Millisecond*Y_TIME, func() { runAfterY(server, neighbors, &membership, id) })
-	// time.AfterFunc(time.Second*time.Duration(Z_TIME), func() { runAfterZ(server, id) })
+	time.AfterFunc(time.Millisecond*POLL_INTERVAL, func() { state.handlePoll(server) })
 
 	wg.Add(1)
 	wg.Wait()
 }
 
-func runAfterX(server *rpc.Client, node *shared.Node, membership **shared.Membership, id int) {
-	//TODO
+func (s *ClientState) handlePoll(server *rpc.Client) {
 	self_node.Hbcounter++
 	self_node.Time = calcTime()
 	self_node.Alive = true
 
-	membership_lock.Lock()
-	(*membership).Update(self_node, nil)
-	membership_lock.Unlock()
+	s.membership.Update(self_node, nil)
 
 	if role == raft.RoleLeader {
 		sendHeartbeats(server)
 	}
 
-	time.AfterFunc(time.Millisecond*X_TIME, func() { runAfterX(server, node, membership, id) })
-}
+	detectFailures(&s.membership)
 
-func runAfterY(server *rpc.Client, neighbors [2]int, membership **shared.Membership, id int) {
-	membership_lock.Lock()
-	detectFailures(*membership)
-	membership_lock.Unlock()
-
-	for _, msg := range readMessages(server, id) {
+	for _, msg := range readMessages(server, s.id) {
 		switch smsg := msg.(type) {
 		case shared.GossipHeartbeat:
-			membership_lock.Lock()
-			*membership = shared.CombineTables(*membership, &smsg.Membership)
-			membership_lock.Unlock()
+			s.membership.MergeLeft(smsg.Membership)
 			// printMembership(**membership)
 		case shared.RequestVote:
 			sendMessage(server, smsg.CandidateId, shared.RequestVoteResp{Term: currentTerm, Vote: requestVote(server, smsg)})
@@ -371,30 +361,11 @@ func runAfterY(server *rpc.Client, neighbors [2]int, membership **shared.Members
 			handleLeaderHeartbeat(server, smsg)
 		}
 	}
-	neighbors = self_node.InitializeNeighbors(id)
-	time.AfterFunc(time.Millisecond*Y_TIME, func() { runAfterY(server, neighbors, membership, id) })
+
+	time.AfterFunc(time.Millisecond*POLL_INTERVAL, func() { s.handlePoll(server) })
 }
 
-func runAfterZ(server *rpc.Client, id int) {
-	//TODO
-	self_node.Alive = false
-	fmt.Printf("Node %d: Crashed\n", id)
-	fmt.Printf("Heartbeat Counter: %d\n", self_node.Hbcounter)
-	fmt.Printf("Time: %v\n", self_node.Time)
-
-	// FIX: Use a Node pointer for the reply instead of a bool
-	var reply shared.Node
-	err := server.Call("Membership.Update", self_node, &reply)
-	if err != nil {
-		fmt.Println("Error: Membership.Update()", err)
-	} else {
-		fmt.Printf("Success: Node %d marked as dead\n", id)
-	}
-
-	wg.Done()
-}
-
-func printMembership(m shared.Membership) {
+func printMembership(m gossip.Membership) {
 	for i := range MAX_NODES {
 		var val, exists = m.Members[i+1]
 		if exists {
