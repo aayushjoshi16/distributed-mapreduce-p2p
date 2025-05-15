@@ -32,6 +32,11 @@ type LeaderHeartbeat struct {
 	LeaderId int
 }
 
+type MapTask struct {
+	ChunkID int
+	Chunk	string
+}
+
 // Helper func to create random time not heard from leader to become candidate
 func RandomLeadTimeout() time.Duration {
 	var d = rand.Intn(150) + 150

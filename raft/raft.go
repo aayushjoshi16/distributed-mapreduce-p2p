@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/rpc"
 	"time"
+	"lab4/mapreduce"
 )
 
 type Role int
@@ -161,7 +162,7 @@ func (s *RaftState) StartElection(server *rpc.Client, id int) {
 }
 
 // Handle vote responses
-func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
+func (s *RaftState) VoteResponse(server *rpc.Client, resp shared.RequestVoteResp, id int) {
 	// If received a higher term, revert to follower
 	if resp.Term > s.term {
 		s.term = resp.Term
@@ -188,6 +189,7 @@ func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
 
 			s.role = RoleLeader
 			fmt.Printf("Node %d: Became leader for term %d\n", id, s.term)
+			go startMapReduceJob(server)
 
 			// Stop election timer as leaders don't timeout
 			if s.election_timer != nil {
@@ -239,5 +241,30 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 
 		fmt.Printf("Node %d: Received heartbeat from leader %d (term %d)\n",
 			id, heartbeat.LeaderId, heartbeat.Term)
+	}
+}
+
+// Probably want to move this to mapreduce file (but i want to avoid import hell at the moment) (will only be run by leader at the moment)
+func startMapReduceJob(server *rpc.Client) {
+	//mapf, reducef := mapreduce.LoadPlugin("wc.so")
+	buffer, _ := mapreduce.SplitFile("data/pg-being_ernest.txt")
+	numChunks := (len(buffer) + mapreduce.BUFER_SIZE - 1) / mapreduce.BUFER_SIZE
+
+	for chunkID := 0; chunkID < numChunks; chunkID++ {
+		start := chunkID * mapreduce.BUFER_SIZE
+		end := start + mapreduce.BUFER_SIZE
+		if end > len(buffer) {
+			end = len(buffer)
+		}
+
+		chunk := buffer[start:end]
+
+		task := shared.MapTask{	
+			ChunkID: chunkID,
+			Chunk: string(chunk),
+		}
+
+		// send for mapping
+		shared.SendMessage(server, (chunkID % shared.MAX_NODES) + 1 ,task)
 	}
 }
