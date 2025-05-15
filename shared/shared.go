@@ -1,12 +1,17 @@
 package shared
 
 import (
+	"fmt"
 	"lab4/gossip"
+	"net/rpc"
+
 	// "fmt"
 	"math/rand"
 	"sync"
 	"time"
 )
+
+const MAX_NODES = 8
 
 type GossipHeartbeat struct {
 	Membership gossip.Membership
@@ -81,4 +86,29 @@ func (req *Requests) Listen(ID int, reply *[]any) error {
 	}
 	*reply = make([]any, 0) // Return an empty membership if not found
 	return nil
+}
+
+// Send the current membership table to a neighboring node with the provided ID
+func SendMessage(server *rpc.Client, id int, data any) {
+	req := Request{ID: id, Data: data}
+	var reply bool
+	err := server.Call("Requests.Add", req, &reply)
+	if err != nil {
+		fmt.Println("Error: Requests.Add", err)
+	} else {
+		//fmt.Printf("Success: Sent membership to node %d\n", id)
+	}
+}
+
+// Read incoming messages from other nodes
+func ReadMessages(server *rpc.Client, id int) []interface{} {
+	var reply []any
+	err := server.Call("Requests.Listen", id, &reply)
+	if err != nil {
+		fmt.Println("Error: Requests.Listen()", err)
+	} else {
+		//fmt.Printf("Success: Received membership from node %d\n", id)
+
+	}
+	return reply
 }
