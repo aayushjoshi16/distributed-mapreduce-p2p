@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/gob"
 	"fmt"
-	// "lab4/mapreduce"
+	"lab4/mapreduce"
 	"lab4/gossip"
 	"lab4/raft"
 	"lab4/shared"
@@ -13,6 +13,9 @@ import (
 	"sync"
 	"time"
 )
+
+var mapf func(string, string) []mapreduce.KeyValue
+var reducef func(string, []string) string
 
 const (
 	POLL_INTERVAL = 10
@@ -69,11 +72,13 @@ func main() {
 	gob.Register(shared.RequestVote{})
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
+	gob.Register(shared.MapTask{})
 
 	// Connect to RPC server
 	server, _ := rpc.DialHTTP("tcp", "localhost:9005")
 
 	args := os.Args[1:]
+	//mapf, reducef = mapreduce.LoadPlugin("wc.so")
 
 	// Get ID from command line argument
 	if len(args) == 0 {
@@ -129,7 +134,7 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 		case shared.RequestVote:
 			s.raft.RequestVote(server, smsg, s.id)
 		case shared.RequestVoteResp:
-			s.raft.VoteResponse(smsg, s.id)
+			s.raft.VoteResponse(server, smsg, s.id)
 		case shared.LeaderHeartbeat:
 			// raft_timer.Reset(RAFT_X_TIME*time.Second + shared.RandomLeadTimeout())
 			s.raft.HandleLeaderHeartbeat(server, smsg, s.id)

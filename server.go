@@ -23,6 +23,7 @@ func main() {
 	gob.Register(shared.RequestVote{})
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
+	gob.Register(shared.MapTask{})
 
 	// register an HTTP handler for RPC communication
 	rpc.HandleHTTP()

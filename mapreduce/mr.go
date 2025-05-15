@@ -25,7 +25,7 @@ func SplitFile(filename string) ([]byte, error) {
 	f, err := os.Open(filename)
 
 	if err != nil {
-		fmt.Println("Error opening file:", err)
+		fmt.Println("Err opening file:", err)
 		return []byte{}, err
 	}
 	defer f.Close()
