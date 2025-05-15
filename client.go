@@ -159,6 +159,9 @@ func voteResponse(resp shared.RequestVoteResp) {
 			role = raft.RoleLeader
 			fmt.Printf("Node %d: Became leader for term %d\n", self_node.ID, currentTerm)
 
+			// Start MapReduce
+			
+
 			// Stop election timer as leaders don't timeout
 			if raft_timer != nil {
 				raft_timer.Stop()
