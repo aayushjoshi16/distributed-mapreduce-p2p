@@ -3,8 +3,8 @@ package mapreduce
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"os"
+	"strings"
 )
 
 type KeyValue struct {
@@ -17,47 +17,82 @@ const (
 	inprogress = 1
 	completed  = 2
 
-	BUFER_SIZE = 10240 // 10kB
+	BUFFER_SIZE = 10240 // 10kB
 )
 
-func SplitFile(filename string) ([]byte, error) {
+func SplitFile(filename string) ([]string, error) {
 	// code inspired from Medium article regarding
 	f, err := os.Open(filename)
 
 	if err != nil {
 		fmt.Println("Error opening file:", err)
-		return []byte{}, err
+		return nil, err
 	}
 	defer f.Close()
 
-	reader := bufio.NewReader(f)
-	fmt.Println("Splitting file:", filename)
+	scanner := bufio.NewScanner(f)
+	scanner.Split(bufio.ScanWords)
 
-	var buffer []byte
+	//fmt.Println("Splitting file:", filename)
 
-	for {
-		temp := make([]byte, BUFER_SIZE)
-		n, err := reader.Read(temp)
+	var chunks []string
 
-		buffer = append(buffer, temp[:n]...)
+	var buffer strings.Builder
 
-		//fmt.Println("Read bytes:", n)
-		//fmt.Println("buffer size:", len(buffer))
-		
-		if n == 0 {
+	for scanner.Scan() {
+		word := scanner.Text()
 
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				fmt.Println("Error reading file:", err)
-				break
-			}
-			return buffer, nil
+		tokenSize := len(word) + 1 // +1 for space
 
+		if buffer.Len()+tokenSize > BUFFER_SIZE && buffer.Len() > 0 {
+			chunks = append(chunks, buffer.String())
+			buffer.Reset()
+		}
+
+		if buffer.Len() > 0 {
+			buffer.WriteString(" ")
+		}
+		buffer.WriteString(word)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Println("Error reading file:", err)
+		return nil, err
+
+	}
+	if buffer.Len() > 0 {
+		chunks = append(chunks, buffer.String())
+	}
+	//fmt.Println("File split into", len(chunks), "chunks")
+	return chunks, nil
+}
+
+func GetTask(args *MasterTask, reply *KeyValue) error {
+	args.mutex.Lock()
+	defer args.mutex.Unlock()
+
+	if args.phase == DonePhase {
+		return nil
+	}
+
+	for i := 0; i < len(args.mapTasks); i++ {
+		if args.mapTasks[i] == Idle {
+			args.mapTasks[i] = InProgress
+			reply.Key = args.files[i]
+			reply.Value = fmt.Sprintf("%d", i)
+			return nil
 		}
 	}
-	return buffer, nil
+
+	for i := 0; i < len(args.reduceTasks); i++ {
+		if args.reduceTasks[i] == Idle {
+			args.reduceTasks[i] = InProgress
+			reply.Key = fmt.Sprintf("reduce-%d", i)
+			reply.Value = ""
+			return nil
+		}
+	}
+
+	return nil
 }
 
 // Structure for replication

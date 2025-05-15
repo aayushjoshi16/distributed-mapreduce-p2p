@@ -3,6 +3,7 @@ package main
 import (
 	"lab4/gossip"
 	"lab4/shared"
+	"lab4/mapreduce"
 	// "lab4/mapreduce"
 	"encoding/gob"
 	"fmt"
@@ -14,10 +15,12 @@ func main() {
 	// create a Membership list
 	nodes := gossip.NewMembership()
 	requests := shared.NewRequests()
+	tasks := mapreduce.MakeMaster([]string{"./data/pg-metamorphosis.txt", "./data/pg-being_ernest.txt"}, 8)
 
 	// register nodes with `rpc.DefaultServer`
 	rpc.Register(&nodes)
 	rpc.Register(requests)
+	rpc.Register(tasks)
 	gob.Register(gossip.Membership{})
 	gob.Register(shared.GossipHeartbeat{})
 	gob.Register(shared.RequestVote{})
