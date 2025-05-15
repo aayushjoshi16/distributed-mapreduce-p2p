@@ -107,6 +107,11 @@ func (s *RaftState) RequestVote(server *rpc.Client, args shared.RequestVote, id 
 
 // Reset the election timeout timer with random duration
 func (s *RaftState) ResetElectionTimer(server *rpc.Client, id int) {
+	if s.election_timer != nil {
+		s.election_timer.Stop()
+		s.election_timer = nil
+	}
+
 	// Create a random election timeout (between 150-300ms)
 	electionTimeout := time.Duration(RAFT_X_TIME+rand.Intn(RAFT_Y_MAX)+RAFT_Y_MIN) * time.Millisecond
 
@@ -117,10 +122,6 @@ func (s *RaftState) ResetElectionTimer(server *rpc.Client, id int) {
 	// leaderID = nil
 
 	// Reset or create the timer
-	if s.election_timer != nil {
-		s.election_timer.Stop()
-	}
-
 	s.election_timer = time.AfterFunc(electionTimeout, func() {
 		s.StartElection(server, id)
 	})
@@ -152,7 +153,7 @@ func (s *RaftState) StartElection(server *rpc.Client, id int) {
 			Term:        s.term,
 			CandidateId: id,
 		}
-		shared.SendMessage(server, i, voteReq)
+		shared.AsyncSendMessage(server, i, voteReq)
 	}
 
 	// Reset election timeout in case we don't get majority

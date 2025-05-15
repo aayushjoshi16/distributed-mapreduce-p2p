@@ -100,6 +100,12 @@ func SendMessage(server *rpc.Client, id int, data any) {
 	}
 }
 
+func AsyncSendMessage(server *rpc.Client, id int, data any) {
+	req := Request{ID: id, Data: data}
+	var reply bool
+	server.Go("Requests.Add", req, &reply, nil)
+}
+
 // Read incoming messages from other nodes
 func ReadMessages(server *rpc.Client, id int) []interface{} {
 	var reply []any
