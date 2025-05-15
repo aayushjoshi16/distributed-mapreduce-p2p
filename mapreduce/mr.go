@@ -60,4 +60,16 @@ func SplitFile(filename string) ([]byte, error) {
 	return buffer, nil
 }
 
-// selecting
+// Structure for replication
+// Replicaiton betwen leader and atleast one follower
+/*
+1. Have the leader in a persistent state
+2. after that trigger the splitting and distribution of tasks
+3. Everything maps and reduces
+3. After that pulling tasks, ideally shared channel to pull tasks may be impracticaly
+4. Probably just have leader split tasks based on hashing and modulus
+5. Write the mapping to an intermediate file
+6. After that, multiple reducers
+
+
+*/
