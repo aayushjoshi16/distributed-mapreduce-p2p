@@ -2,28 +2,50 @@ package main
 
 import (
 	"lab4/gossip"
-	"lab4/shared"
 	"lab4/mapreduce"
+	"lab4/shared"
+	"os"
+
 	// "lab4/mapreduce"
 	"encoding/gob"
 	"fmt"
 	"net/http"
 	"net/rpc"
+	"time"
 )
 
+func detectAndReset(nodes *gossip.Membership, master *mapreduce.MasterTask) {
+	// Check for failures and reset the nodes
+	for {
+		time.Sleep(2 * time.Second)
+
+		for id, node := range nodes.Members {
+			if !node.Alive {
+				master.HandleWorkerFailure(id)
+			}
+		}
+	}
+}
+
 func main() {
+	if _, err := os.Stat("./data"); err != nil {
+		fmt.Println("Data directory not found. Please create a data directory with the required files.")
+		return
+	} else {
+		fmt.Println("Data directory found.")
+	}
+
 	// create a Membership list
 	nodes := gossip.NewMembership()
 	requests := shared.NewRequests()
 	tasks := mapreduce.MakeMaster([]string{"./data/pg-metamorphosis.txt", "./data/pg-being_ernest.txt"}, 8)
 
-
-
 	// register nodes with `rpc.DefaultServer`
-	
+
 	rpc.Register(&nodes)
 	rpc.Register(requests)
 	rpc.Register(tasks)
+
 	gob.Register(gossip.Membership{})
 	gob.Register(shared.GossipHeartbeat{})
 	gob.Register(shared.RequestVote{})
@@ -34,6 +56,10 @@ func main() {
 	gob.Register(mapreduce.GetTaskReply{})
 	gob.Register(mapreduce.ReportTaskArgs{})
 	gob.Register(mapreduce.ReportTaskReply{})
+	gob.Register(mapreduce.KeyValue{})
+	gob.Register(mapreduce.MasterTask{})
+
+	go detectAndReset(&nodes, tasks)
 
 	// register an HTTP handler for RPC communication
 	rpc.HandleHTTP()

@@ -3,10 +3,13 @@ package main
 import (
 	"encoding/gob"
 	"fmt"
+
 	// "lab4/mapreduce"
 	"lab4/gossip"
+	"lab4/mapreduce"
 	"lab4/raft"
 	"lab4/shared"
+	"lab4/wc"
 	"net/rpc"
 	"os"
 	"strconv"
@@ -49,6 +52,7 @@ type ClientState struct {
 	id         int
 	membership gossip.Membership
 	raft       raft.RaftState
+	isActive   bool
 }
 
 func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
@@ -60,6 +64,7 @@ func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
 		id:         id,
 		membership: membership,
 		raft:       raft,
+		isActive:   true,
 	}
 }
 
@@ -69,6 +74,13 @@ func main() {
 	gob.Register(shared.RequestVote{})
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
+
+	gob.Register(mapreduce.GetTaskArgs{})
+	gob.Register(mapreduce.GetTaskReply{})
+	gob.Register(mapreduce.ReportTaskArgs{})
+	gob.Register(mapreduce.ReportTaskReply{})
+	gob.Register(mapreduce.KeyValue{})
+	gob.Register(mapreduce.MasterTask{})
 
 	// Connect to RPC server
 	server, _ := rpc.DialHTTP("tcp", "localhost:9005")
@@ -103,6 +115,8 @@ func main() {
 	state := NewState(id, self_node, server)
 
 	time.AfterFunc(time.Millisecond*POLL_INTERVAL, func() { state.handlePoll(server) })
+
+	go state.runMapReduceWorker(server)
 
 	var wg = sync.WaitGroup{}
 	wg.Add(1)
@@ -151,4 +165,123 @@ func printMembership(m gossip.Membership) {
 		}
 	}
 	fmt.Println("")
+}
+
+func (s *ClientState) reportTaskComplete(server *rpc.Client, taskType mapreduce.TaskPhase, taskID int) {
+	if server == nil {
+		fmt.Printf("Node %d: Error - RPC client is nil\n", s.id)
+		return
+	}
+
+	args := mapreduce.ReportTaskArgs{
+		TaskType: taskType,
+		TaskID:   taskID,
+	}
+	reply := mapreduce.ReportTaskReply{}
+
+	// First try the original RPC method name
+	err := server.Call("MasterTask.ReportTaskDone", &args, &reply)
+	if err != nil {
+		// If that fails, try another naming convention
+		fmt.Printf("Node %d: First attempt to report task failed: %v. Trying alternative...\n", s.id, err)
+		err = server.Call("Master.ReportTaskDone", &args, &reply)
+
+		if err != nil {
+			fmt.Printf("Node %d: Error reporting task %d: %v\n", s.id, taskID, err)
+			return
+		}
+	}
+
+	fmt.Printf("Node %d: Successfully reported completion of task %d\n", s.id, taskID)
+
+}
+
+func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
+	fmt.Printf("Node %d: Starting MapReduce worker\n", s.id)
+
+	totalReduce := 0
+
+	for s.isActive {
+		args := mapreduce.GetTaskArgs{}
+		reply := mapreduce.GetTaskReply{}
+
+		// Using Call instead of Go to avoid the nil pointer issue
+		err := server.Call("MasterTask.GetTask", &args, &reply)
+		if err != nil {
+			fmt.Printf("Node %d: Error getting task: %v\n", s.id, err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		if reply.NReduce > 0 {
+			totalReduce = reply.NReduce
+		}
+
+		switch reply.TaskType {
+		case mapreduce.MapPhase:
+			fmt.Printf("Node %d: Running Map Task %d on file %s\n", s.id, reply.MapTaskID, reply.FileName)
+
+			// Verify file exists
+			if _, err := os.Stat(reply.FileName); os.IsNotExist(err) {
+				fmt.Printf("Node %d: File does not exist: %s\n", s.id, reply.FileName)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			err := mapreduce.ExecuteMTask(reply.FileName, reply.MapTaskID, reply.NReduce, wc.Map)
+			if err != nil {
+				fmt.Printf("Node %d: Error executing map task %d: %v\n", s.id, reply.MapTaskID, err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			fmt.Printf("Node %d: Completed Map Task %d\n", s.id, reply.MapTaskID)
+			s.reportTaskComplete(server, mapreduce.MapPhase, reply.MapTaskID)
+
+		case mapreduce.ReducePhase:
+			fmt.Printf("Node %d: Running Reduce Task %d\n", s.id, reply.ReduceTaskID)
+
+			// Use the correct NMap value
+			nMap := reply.NMap
+			if nMap == 0 {
+				fmt.Printf("Node %d: Warning - NMap is 0, using 2 as default\n", s.id)
+				nMap = 2 // Default to 2 as a fallback
+			}
+
+			err := mapreduce.ExecuteRTask(reply.ReduceTaskID, nMap, wc.Reduce)
+			if err != nil {
+				fmt.Printf("Node %d: Error executing reduce task %d: %v\n", s.id, reply.ReduceTaskID, err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			fmt.Printf("Node %d: Completed Reduce Task %d\n", s.id, reply.ReduceTaskID)
+			s.reportTaskComplete(server, mapreduce.ReducePhase, reply.ReduceTaskID)
+
+		case mapreduce.DonePhase:
+			fmt.Printf("Node %d: All tasks are done\n", s.id)
+			time.Sleep(5 * time.Second)
+
+			if totalReduce > 0 {
+				//fmt.Printf("Node %d: Leader detected, merging outputs...\n", s.id)
+				err := mapreduce.MergeReduceOutputs(totalReduce, "mr-out-final")
+				if err != nil {
+					fmt.Printf("Node %d: Error merging outputs: %v\n", s.id, err)
+				} else {
+					fmt.Printf("Node %d: Successfully merged outputs to mr-out-final\n", s.id)
+				}
+			}
+			time.Sleep(5 * time.Second)
+			s.isActive = false
+			fmt.Printf("Node %d: Exiting MapReduce worker\n", s.id)
+			return
+
+		default:
+			fmt.Printf("Node %d: Unknown task type %d\n", s.id, reply.TaskType)
+			time.Sleep(1 * time.Second)
+		}
+
+		// Small delay between task requests
+		time.Sleep(100 * time.Millisecond)
+	}
 }

@@ -1,9 +1,10 @@
 package mapreduce
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 	"time"
-	"errors"
 )
 
 type TaskPhase int
@@ -30,6 +31,7 @@ type GetTaskReply struct {
 	MapTaskID    int
 	ReduceTaskID int
 	NReduce      int
+	NMap         int
 }
 
 type ReportTaskArgs struct {
@@ -71,87 +73,136 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 	defer m.mu.Unlock()
 
 	if m.phase == DonePhase {
-		return errors.New("all tasks are done")
-	}
-
-	for i, status := range m.mapStatus {
-		if status == Idle ||
-			(status == InProgress && time.Since(m.mapStartTime[i]) > 10*time.Second) {
-			m.mapStatus[i] = InProgress
-			m.mapStartTime[i] = time.Now()
-
-			*reply = GetTaskReply{
-				TaskType:    MapPhase,
-				FileName:    m.files[i],
-				MapTaskID:   i,
-				NReduce: m.nReduce,
-			}
-			return nil
-		}
-	
-	}
-	allDone := true
-
-	for _, status := range m.mapStatus {
-		if status != Completed {
-			allDone = false
-		}
-	}
-	if allDone && m.phase == MapPhase {
-		m.phase = ReducePhase
-	}
-
-	for i, status := range m.reduceStatus {
-		if status == Idle ||
-			(status == InProgress && time.Since(m.reduceStartTime[i]) > 10*time.Second) {
-			m.reduceStatus[i] = InProgress
-			m.reduceStartTime[i] = time.Now()
-
-			*reply = GetTaskReply{
-				TaskType:    ReducePhase,
-				FileName:    m.files[i],
-				MapTaskID:   i,
-				NReduce: m.nReduce,
-			}
-			return nil
-		}
-	
-	}
-	
-	if m.phase == DonePhase {
 		*reply = GetTaskReply{
-			TaskType:    DonePhase,
+			TaskType: DonePhase,
+			NMap:     len(m.files),
 		}
 		return nil
+	}
+
+	if m.phase == MapPhase {
+		for i, status := range m.mapStatus {
+			if status == Idle ||
+				(status == InProgress && time.Since(m.mapStartTime[i]) > 10*time.Second) {
+				m.mapStatus[i] = InProgress
+				m.mapStartTime[i] = time.Now()
+
+				if i < len(m.files) {
+					*reply = GetTaskReply{
+						TaskType:  MapPhase,
+						FileName:  m.files[i],
+						MapTaskID: i,
+						NReduce:   m.nReduce,
+						NMap:      len(m.files),
+					}
+					fmt.Printf("Assigning map task %d with file %s\n", i, m.files[i])
+					return nil
+				} else {
+					fmt.Printf("Warning: Attempted to access file index %d, but only have %d files\n",
+						i, len(m.files))
+					m.mapStatus[i] = Idle // Reset status since we can't process it
+					continue
+				}
+			}
+
+		}
+		allDone := true
+
+		for _, status := range m.mapStatus {
+			if status != Completed {
+				allDone = false
+			}
+		}
+		if allDone && m.phase == MapPhase {
+			m.phase = ReducePhase
+		}
+	}
+
+	if m.phase == ReducePhase {
+		for i, status := range m.reduceStatus {
+			if status == Idle ||
+				(status == InProgress && time.Since(m.reduceStartTime[i]) > 10*time.Second) {
+				m.reduceStatus[i] = InProgress
+				m.reduceStartTime[i] = time.Now()
+
+				*reply = GetTaskReply{
+					TaskType:     ReducePhase,
+					ReduceTaskID: i,
+					NReduce:      m.nReduce,
+				}
+				return nil
+			}
+
+		}
+
+		if m.phase == DonePhase {
+			*reply = GetTaskReply{
+				TaskType: DonePhase,
+			}
+			return nil
+		}
 	}
 	return errors.New("no tasks available")
 }
 
 func (m *MasterTask) ReportTaskDone(args ReportTaskArgs, reply *ReportTaskReply) error {
-  m.mu.Lock(); defer m.mu.Unlock()
-  switch args.TaskType {
-  case MapPhase:
-    if args.TaskID < 0 || args.TaskID >= len(m.mapStatus) {
-      return errors.New("invalid MapTaskID")
-    }
-    m.mapStatus[args.TaskID] = Completed
-    all := true
-    for _, s := range m.mapStatus {
-      if s != Completed { all = false }
-    }
-    if all { m.phase = ReducePhase }
-  case ReducePhase:
-    if args.TaskID < 0 || args.TaskID >= len(m.reduceStatus) {
-      return errors.New("invalid ReduceTaskID")
-    }
-    m.reduceStatus[args.TaskID] = Completed
-    all := true
-    for _, s := range m.reduceStatus {
-      if s != Completed { all = false }
-    }
-    if all { m.phase = DonePhase }
-  default:
-    return errors.New("unknown TaskType")
-  }
-  return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	switch args.TaskType {
+	case MapPhase:
+		if args.TaskID < 0 || args.TaskID >= len(m.mapStatus) {
+			return errors.New("invalid MapTaskID")
+		}
+		m.mapStatus[args.TaskID] = Completed
+
+		all := true
+		for _, s := range m.mapStatus {
+			if s != Completed {
+				all = false
+				break
+			}
+		}
+		if all {
+			m.phase = ReducePhase
+		}
+
+	case ReducePhase:
+		if args.TaskID < 0 || args.TaskID >= len(m.reduceStatus) {
+			return errors.New("invalid ReduceTaskID")
+		}
+		m.reduceStatus[args.TaskID] = Completed
+
+		all := true
+		for _, s := range m.reduceStatus {
+			if s != Completed {
+				all = false
+				break
+			}
+		}
+		if all {
+			m.phase = DonePhase
+		}
+	default:
+		return errors.New("unknown TaskType")
+	}
+	return nil
+}
+
+func (m *MasterTask) HandleWorkerFailure(workerID int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i, status := range m.mapStatus {
+		if status == InProgress && time.Since(m.mapStartTime[i]) > 10*time.Second {
+			m.mapStatus[i] = Idle
+		}
+	}
+
+	for i, status := range m.reduceStatus {
+		if status == InProgress && time.Since(m.reduceStartTime[i]) > 10*time.Second {
+			m.reduceStatus[i] = Idle
+		}
+	}
+
 }
