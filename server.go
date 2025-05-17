@@ -17,7 +17,10 @@ func main() {
 	requests := shared.NewRequests()
 	tasks := mapreduce.MakeMaster([]string{"./data/pg-metamorphosis.txt", "./data/pg-being_ernest.txt"}, 8)
 
+
+
 	// register nodes with `rpc.DefaultServer`
+	
 	rpc.Register(&nodes)
 	rpc.Register(requests)
 	rpc.Register(tasks)
@@ -26,6 +29,11 @@ func main() {
 	gob.Register(shared.RequestVote{})
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
+
+	gob.Register(mapreduce.GetTaskArgs{})
+	gob.Register(mapreduce.GetTaskReply{})
+	gob.Register(mapreduce.ReportTaskArgs{})
+	gob.Register(mapreduce.ReportTaskReply{})
 
 	// register an HTTP handler for RPC communication
 	rpc.HandleHTTP()

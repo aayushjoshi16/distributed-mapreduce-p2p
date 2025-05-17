@@ -100,9 +100,58 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 	if allDone && m.phase == MapPhase {
 		m.phase = ReducePhase
 	}
+
+	for i, status := range m.reduceStatus {
+		if status == Idle ||
+			(status == InProgress && time.Since(m.reduceStartTime[i]) > 10*time.Second) {
+			m.reduceStatus[i] = InProgress
+			m.reduceStartTime[i] = time.Now()
+
+			*reply = GetTaskReply{
+				TaskType:    ReducePhase,
+				FileName:    m.files[i],
+				MapTaskID:   i,
+				NReduce: m.nReduce,
+			}
+			return nil
+		}
+	
+	}
 	
 	if m.phase == DonePhase {
-		*reply = GetTask
+		*reply = GetTaskReply{
+			TaskType:    DonePhase,
+		}
+		return nil
 	}
+	return errors.New("no tasks available")
+}
 
+func (m *MasterTask) ReportTaskDone(args ReportTaskArgs, reply *ReportTaskReply) error {
+  m.mu.Lock(); defer m.mu.Unlock()
+  switch args.TaskType {
+  case MapPhase:
+    if args.TaskID < 0 || args.TaskID >= len(m.mapStatus) {
+      return errors.New("invalid MapTaskID")
+    }
+    m.mapStatus[args.TaskID] = Completed
+    all := true
+    for _, s := range m.mapStatus {
+      if s != Completed { all = false }
+    }
+    if all { m.phase = ReducePhase }
+  case ReducePhase:
+    if args.TaskID < 0 || args.TaskID >= len(m.reduceStatus) {
+      return errors.New("invalid ReduceTaskID")
+    }
+    m.reduceStatus[args.TaskID] = Completed
+    all := true
+    for _, s := range m.reduceStatus {
+      if s != Completed { all = false }
+    }
+    if all { m.phase = DonePhase }
+  default:
+    return errors.New("unknown TaskType")
+  }
+  return nil
 }

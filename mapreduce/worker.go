@@ -2,6 +2,9 @@ package mapreduce
 
 import (
 	"lab4/wc"
+	"hash/fnv"
+	"fmt"
+	"log"
 )
 
 // for sorting by key.
@@ -17,6 +20,9 @@ func ihash(key string) int {
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
+
+func executeMTask(fileName string, mapTaskID int, nReduce int, mapf func(string, string) []wc.KeyValue) {
+	
 
 func MakeWorker(mapf func(string, string) []wc.KeyValue, reducef func(string, []string) string) {
 	for {
