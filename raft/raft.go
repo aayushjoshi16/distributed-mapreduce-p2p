@@ -45,7 +45,7 @@ type RaftState struct {
 	leader         *int
 }
 
-func NewRaftState(server *rpc.Client, id int) RaftState {
+func NewRaftState(server *rpc.Client, id int) *RaftState {
 	s := RaftState{
 		role:           RoleFollower,
 		election_timer: nil,
@@ -55,7 +55,7 @@ func NewRaftState(server *rpc.Client, id int) RaftState {
 		leader:         nil,
 	}
 	s.ResetElectionTimer(server, id)
-	return s
+	return &s
 }
 
 // RequestVotes for candidate calling on them
@@ -234,10 +234,23 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 		// Reset to follower (even if already follower)
 		s.role = RoleFollower
 
+		// Assign as current leader
+		s.leader = &heartbeat.LeaderId
+
 		// Reset election timer
 		s.ResetElectionTimer(server, id)
 
-		fmt.Printf("Node %d: Received heartbeat from leader %d (term %d)\n",
-			id, heartbeat.LeaderId, heartbeat.Term)
+		// fmt.Printf("Node %d: Received heartbeat from leader %d (term %d)\n",
+		// 	id, heartbeat.LeaderId, heartbeat.Term)
 	}
+}
+
+func (s *RaftState) GetLeader() *int {
+	// I LOVE GO
+	if s.leader == nil {
+		return nil
+	}
+	l := new(int)
+	*l = *s.leader
+	return l
 }

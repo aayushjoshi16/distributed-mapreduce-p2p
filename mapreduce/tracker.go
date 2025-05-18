@@ -23,7 +23,9 @@ const (
 	Completed
 )
 
-type GetTaskArgs struct{}
+type GetTaskArgs struct {
+	SenderId int
+}
 
 type GetTaskReply struct {
 	TaskType     TaskPhase

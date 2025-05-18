@@ -38,13 +38,11 @@ func main() {
 	// create a Membership list
 	nodes := gossip.NewMembership()
 	requests := shared.NewRequests()
-	tasks := mapreduce.MakeMaster([]string{"./data/pg-metamorphosis.txt", "./data/pg-being_ernest.txt"}, 8)
 
 	// register nodes with `rpc.DefaultServer`
 
 	rpc.Register(&nodes)
 	rpc.Register(requests)
-	rpc.Register(tasks)
 
 	gob.Register(gossip.Membership{})
 	gob.Register(shared.GossipHeartbeat{})
@@ -59,7 +57,7 @@ func main() {
 	gob.Register(mapreduce.KeyValue{})
 	gob.Register(mapreduce.MasterTask{})
 
-	go detectAndReset(&nodes, tasks)
+	// go detectAndReset(&nodes, tasks)
 
 	// register an HTTP handler for RPC communication
 	rpc.HandleHTTP()

@@ -51,8 +51,10 @@ func detectFailures(membership *gossip.Membership) {
 type ClientState struct {
 	id         int
 	membership gossip.Membership
-	raft       raft.RaftState
+	raft       *raft.RaftState
 	isActive   bool
+	taskChan   chan mapreduce.GetTaskReply
+	tracker    *mapreduce.MasterTask
 }
 
 func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
@@ -64,7 +66,9 @@ func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
 		id:         id,
 		membership: membership,
 		raft:       raft,
-		isActive:   true,
+		isActive:   false,
+		taskChan:   make(chan mapreduce.GetTaskReply, 1),
+		tracker:    nil,
 	}
 }
 
@@ -116,8 +120,6 @@ func main() {
 
 	time.AfterFunc(time.Millisecond*POLL_INTERVAL, func() { state.handlePoll(server) })
 
-	go state.runMapReduceWorker(server)
-
 	var wg = sync.WaitGroup{}
 	wg.Add(1)
 	wg.Wait()
@@ -147,6 +149,25 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 		case shared.LeaderHeartbeat:
 			// raft_timer.Reset(RAFT_X_TIME*time.Second + shared.RandomLeadTimeout())
 			s.raft.HandleLeaderHeartbeat(server, smsg, s.id)
+			// we have a leader GO GO GO
+			if !s.isActive {
+				// technically there is a race condition here. I really hope it doesn't matter.
+				s.isActive = true
+				go s.runMapReduceWorker(server)
+			}
+		case mapreduce.GetTaskArgs:
+			// should only recieve this if leader
+			if s.tracker == nil {
+				s.tracker = mapreduce.MakeMaster([]string{"./data/pg-metamorphosis.txt", "./data/pg-being_ernest.txt"}, 8)
+			}
+			reply := mapreduce.GetTaskReply{}
+			s.tracker.GetTask(smsg, &reply)
+			shared.SendMessage(server, smsg.SenderId, reply)
+		case mapreduce.ReportTaskArgs:
+			reply := mapreduce.ReportTaskReply{}
+			s.tracker.ReportTaskDone(smsg, &reply)
+		case mapreduce.GetTaskReply:
+			s.taskChan <- smsg
 		}
 	}
 
@@ -173,24 +194,16 @@ func (s *ClientState) reportTaskComplete(server *rpc.Client, taskType mapreduce.
 		return
 	}
 
+	masterId := s.raft.GetLeader()
+
 	args := mapreduce.ReportTaskArgs{
 		TaskType: taskType,
 		TaskID:   taskID,
 	}
-	reply := mapreduce.ReportTaskReply{}
+	// error handling smirror handling
+	// reply := mapreduce.ReportTaskReply{}
 
-	// First try the original RPC method name
-	err := server.Call("MasterTask.ReportTaskDone", &args, &reply)
-	if err != nil {
-		// If that fails, try another naming convention
-		fmt.Printf("Node %d: First attempt to report task failed: %v. Trying alternative...\n", s.id, err)
-		err = server.Call("Master.ReportTaskDone", &args, &reply)
-
-		if err != nil {
-			fmt.Printf("Node %d: Error reporting task %d: %v\n", s.id, taskID, err)
-			return
-		}
-	}
+	shared.SendMessage(server, *masterId, args)
 
 	fmt.Printf("Node %d: Successfully reported completion of task %d\n", s.id, taskID)
 
@@ -201,17 +214,21 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 
 	totalReduce := 0
 
+	masterId := s.raft.GetLeader()
+	if masterId == nil {
+		s.isActive = false
+		return
+	}
+	fmt.Printf("Node %d: Worker found leader %d\n", s.id, *masterId)
+
 	for s.isActive {
-		args := mapreduce.GetTaskArgs{}
-		reply := mapreduce.GetTaskReply{}
+		args := mapreduce.GetTaskArgs{
+			SenderId: s.id,
+		}
 
 		// Using Call instead of Go to avoid the nil pointer issue
-		err := server.Call("MasterTask.GetTask", &args, &reply)
-		if err != nil {
-			fmt.Printf("Node %d: Error getting task: %v\n", s.id, err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
+		shared.SendMessage(server, *masterId, args)
+		reply := <-s.taskChan
 
 		if reply.NReduce > 0 {
 			totalReduce = reply.NReduce
