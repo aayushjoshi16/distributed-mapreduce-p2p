@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"encoding/json"
+	"os"
 )
 
 type TaskPhase int
@@ -56,6 +58,28 @@ type MasterTask struct {
 	reduceStartTime []time.Time
 }
 
+type TaskLogEntry struct {
+    Phase     string    `json:"phase"`
+    TaskID    int       `json:"task_id"`
+    FileName  string    `json:"file_name,omitempty"`
+    Status    string    `json:"status"` // "idle", "in_progress", "completed"
+    Timestamp time.Time `json:"timestamp"`
+}
+
+func logTask(entry TaskLogEntry) {
+    file, err := os.OpenFile("task_log.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+    if err != nil {
+        fmt.Printf("Failed to write log: %v\n", err)
+        return
+    }
+    defer file.Close()
+
+    enc := json.NewEncoder(file)
+    if err := enc.Encode(entry); err != nil {
+        fmt.Printf("Failed to encode log entry: %v\n", err)
+    }
+}
+
 func MakeMaster(files []string, nReduce int) *MasterTask {
 	m := &MasterTask{
 		files:           files,
@@ -97,6 +121,13 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 						NReduce:   m.nReduce,
 						NMap:      len(m.files),
 					}
+					logTask(TaskLogEntry{
+						Phase:    "map",
+						TaskID:   i,
+						FileName: m.files[i],
+						Status:   "in_progress",
+						Timestamp: time.Now(),
+					})
 					fmt.Printf("Assigning map task %d with file %s\n", i, m.files[i])
 					return nil
 				} else {
@@ -132,6 +163,12 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 					ReduceTaskID: i,
 					NReduce:      m.nReduce,
 				}
+				logTask(TaskLogEntry{
+					Phase:    "reduce",
+					TaskID:   i,
+					Status:   "in_progress",
+					Timestamp: time.Now(),
+				})
 				return nil
 			}
 
