@@ -82,7 +82,6 @@ func main() {
 	gob.Register(mapreduce.GetTaskArgs{})
 	gob.Register(mapreduce.GetTaskReply{})
 	gob.Register(mapreduce.ReportTaskArgs{})
-	gob.Register(mapreduce.ReportTaskReply{})
 	gob.Register(mapreduce.KeyValue{})
 	gob.Register(mapreduce.MasterTask{})
 
@@ -164,8 +163,7 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			s.tracker.GetTask(smsg, &reply)
 			shared.SendMessage(server, smsg.SenderId, reply)
 		case mapreduce.ReportTaskArgs:
-			reply := mapreduce.ReportTaskReply{}
-			s.tracker.ReportTaskDone(smsg, &reply)
+			s.tracker.ReportTaskDone(smsg)
 		case mapreduce.GetTaskReply:
 			s.taskChan <- smsg
 		}

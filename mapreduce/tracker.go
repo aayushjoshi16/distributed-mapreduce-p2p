@@ -1,13 +1,21 @@
 package mapreduce
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
-	"encoding/json"
-	"os"
 )
+
+func invertMap[K comparable, V comparable](m map[K]V) map[V]K {
+	inverted := make(map[V]K)
+	for k, v := range m {
+		inverted[v] = k
+	}
+	return inverted
+}
 
 type TaskPhase int
 
@@ -16,6 +24,16 @@ const (
 	ReducePhase
 	DonePhase
 )
+
+var taskPhaseToStr = map[TaskPhase]string{
+	MapPhase:    "phase",
+	ReducePhase: "reduce",
+	DonePhase:   "done",
+}
+
+func (p TaskPhase) MarshalJSON() ([]byte, error) {
+	return json.Marshal(str)
+}
 
 type TaskStatus int
 
@@ -42,14 +60,12 @@ type ReportTaskArgs struct {
 	TaskType TaskPhase
 	TaskID   int
 }
-type ReportTaskReply struct{}
 
 type MasterTask struct {
 	files   []string
 	nReduce int // number of reduce taks
 
-	mu   sync.Mutex
-	cond *sync.Cond
+	mu sync.Mutex
 
 	phase           TaskPhase
 	mapStatus       []TaskStatus
@@ -58,26 +74,27 @@ type MasterTask struct {
 	reduceStartTime []time.Time
 }
 
+// Imma level with you chief that is giving big chatgpt vibes and in the way where the code fucking sucks and makes me want to commit murder
 type TaskLogEntry struct {
-    Phase     string    `json:"phase"`
-    TaskID    int       `json:"task_id"`
-    FileName  string    `json:"file_name,omitempty"`
-    Status    string    `json:"status"` // "idle", "in_progress", "completed"
-    Timestamp time.Time `json:"timestamp"`
+	Phase     TaskPhase  `json:"phase"`
+	TaskID    int        `json:"task_id"`
+	FileName  string     `json:"file_name,omitempty"`
+	Status    TaskStatus `json:"status"` // "idle", "in_progress", "completed"
+	Timestamp time.Time  `json:"timestamp"`
 }
 
 func logTask(entry TaskLogEntry) {
-    file, err := os.OpenFile("task_log.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-    if err != nil {
-        fmt.Printf("Failed to write log: %v\n", err)
-        return
-    }
-    defer file.Close()
+	file, err := os.OpenFile("task_log.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Printf("Failed to write log: %v\n", err)
+		return
+	}
+	defer file.Close()
 
-    enc := json.NewEncoder(file)
-    if err := enc.Encode(entry); err != nil {
-        fmt.Printf("Failed to encode log entry: %v\n", err)
-    }
+	enc := json.NewEncoder(file)
+	if err := enc.Encode(entry); err != nil {
+		fmt.Printf("Failed to encode log entry: %v\n", err)
+	}
 }
 
 func MakeMaster(files []string, nReduce int) *MasterTask {
@@ -90,7 +107,6 @@ func MakeMaster(files []string, nReduce int) *MasterTask {
 		mapStartTime:    make([]time.Time, len(files)),
 		reduceStartTime: make([]time.Time, nReduce),
 	}
-	m.cond = sync.NewCond(&m.mu)
 	return m
 }
 
@@ -122,10 +138,10 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 						NMap:      len(m.files),
 					}
 					logTask(TaskLogEntry{
-						Phase:    "map",
-						TaskID:   i,
-						FileName: m.files[i],
-						Status:   "in_progress",
+						Phase:     "map",
+						TaskID:    i,
+						FileName:  m.files[i],
+						Status:    "in_progress",
 						Timestamp: time.Now(),
 					})
 					fmt.Printf("Assigning map task %d with file %s\n", i, m.files[i])
@@ -164,9 +180,9 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 					NReduce:      m.nReduce,
 				}
 				logTask(TaskLogEntry{
-					Phase:    "reduce",
-					TaskID:   i,
-					Status:   "in_progress",
+					Phase:     "reduce",
+					TaskID:    i,
+					Status:    "in_progress",
 					Timestamp: time.Now(),
 				})
 				return nil
@@ -184,7 +200,7 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 	return errors.New("no tasks available")
 }
 
-func (m *MasterTask) ReportTaskDone(args ReportTaskArgs, reply *ReportTaskReply) error {
+func (m *MasterTask) ReportTaskDone(args ReportTaskArgs) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

@@ -18,3 +18,13 @@
 {"phase":"reduce","task_id":5,"status":"in_progress","timestamp":"2025-05-17T23:13:33.5369909-07:00"}
 {"phase":"reduce","task_id":6,"status":"in_progress","timestamp":"2025-05-17T23:13:33.6687282-07:00"}
 {"phase":"reduce","task_id":7,"status":"in_progress","timestamp":"2025-05-17T23:13:33.6692403-07:00"}
+{"phase":"map","task_id":0,"file_name":"./data/pg-metamorphosis.txt","status":"in_progress","timestamp":"2025-05-18T20:25:55.25745449-07:00"}
+{"phase":"map","task_id":1,"file_name":"./data/pg-being_ernest.txt","status":"in_progress","timestamp":"2025-05-18T20:25:55.257631504-07:00"}
+{"phase":"reduce","task_id":0,"status":"in_progress","timestamp":"2025-05-18T20:25:55.468776147-07:00"}
+{"phase":"reduce","task_id":1,"status":"in_progress","timestamp":"2025-05-18T20:25:55.468861695-07:00"}
+{"phase":"reduce","task_id":2,"status":"in_progress","timestamp":"2025-05-18T20:25:55.584881768-07:00"}
+{"phase":"reduce","task_id":3,"status":"in_progress","timestamp":"2025-05-18T20:25:55.584980791-07:00"}
+{"phase":"reduce","task_id":4,"status":"in_progress","timestamp":"2025-05-18T20:25:55.701972189-07:00"}
+{"phase":"reduce","task_id":5,"status":"in_progress","timestamp":"2025-05-18T20:25:55.712745399-07:00"}
+{"phase":"reduce","task_id":6,"status":"in_progress","timestamp":"2025-05-18T20:25:55.829451083-07:00"}
+{"phase":"reduce","task_id":7,"status":"in_progress","timestamp":"2025-05-18T20:25:55.829606206-07:00"}
