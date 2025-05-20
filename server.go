@@ -53,7 +53,6 @@ func main() {
 	gob.Register(mapreduce.GetTaskArgs{})
 	gob.Register(mapreduce.GetTaskReply{})
 	gob.Register(mapreduce.ReportTaskArgs{})
-	gob.Register(mapreduce.ReportTaskReply{})
 	gob.Register(mapreduce.KeyValue{})
 	gob.Register(mapreduce.MasterTask{})
 

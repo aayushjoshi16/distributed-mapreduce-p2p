@@ -37,31 +37,40 @@ type LeaderHeartbeat struct {
 }
 
 type RaftState struct {
-	role           Role
-	election_timer *time.Timer
-	term           int
-	cur_vote       *int
-	num_votes      int
-	leader         *int
+	role                  Role
+	election_timer        *time.Timer
+	heartbeat_timer       *time.Timer  // New timer for heartbeat timeouts
+	term                  int
+	cur_vote              *int
+	num_votes             int
+	leader                *int
 }
 
 func NewRaftState(server *rpc.Client, id int) *RaftState {
 	s := RaftState{
-		role:           RoleFollower,
-		election_timer: nil,
-		term:           0,
-		cur_vote:       nil,
-		num_votes:      0,
-		leader:         nil,
+		role:            RoleFollower,
+		election_timer:  nil,
+		heartbeat_timer: nil,
+		term:            0,
+		cur_vote:        nil,
+		num_votes:       0,
+		leader:          nil,
 	}
 	s.ResetElectionTimer(server, id)
+	// No need to set heartbeat timer yet as there's no leader
 	return &s
 }
 
 // RequestVotes for candidate calling on them
 func (s *RaftState) ShouldRequestVote(server *rpc.Client, args shared.RequestVote, id int) bool {
-	fmt.Printf("Node %d: Received vote request from %d with term %d\n", id, args.CandidateId, args.Term)
-	// fmt.Printf("Recieved vote request from %d with term %d, current %d, votedFor %s\n", args.CandidateId, args.Term, currentTerm, votedFor)
+	// Check if a leader already exists
+	if s.leader != nil {
+		return false
+	}
+
+	// Print leader ID
+	fmt.Printf("Node %d: Current leader is %d\n", id, *s.leader)
+
 	// Check if the term is valid
 	if args.Term < s.term {
 		return false
@@ -90,6 +99,11 @@ func (s *RaftState) ShouldRequestVote(server *rpc.Client, args shared.RequestVot
 }
 
 func (s *RaftState) RequestVote(server *rpc.Client, args shared.RequestVote, id int) {
+	// Check if a leader already exists
+	if s.leader != nil {
+		return
+	}
+
 	if s.ShouldRequestVote(server, args, id) {
 		s.cur_vote = &args.CandidateId
 		s.ResetElectionTimer(server, id)
@@ -115,22 +129,33 @@ func (s *RaftState) ResetElectionTimer(server *rpc.Client, id int) {
 	// Create a random election timeout (between 150-300ms)
 	electionTimeout := time.Duration(RAFT_X_TIME+rand.Intn(RAFT_Y_MAX)+RAFT_Y_MIN) * time.Millisecond
 
-	// Reset voted for and all other variables to default to start a new election
-	// votes = 0
-	// votedFor = nil
-	// role = raft.RoleFollower
-	// leaderID = nil
-
 	// Reset or create the timer
 	s.election_timer = time.AfterFunc(electionTimeout, func() {
 		s.StartElection(server, id)
 	})
 }
 
+// Add a new function to initialize and reset the heartbeat timer
+func (s *RaftState) ResetHeartbeatTimer(server *rpc.Client, id int) {
+    if s.heartbeat_timer != nil {
+        s.heartbeat_timer.Stop()
+        s.heartbeat_timer = nil
+    }
+    
+	// Set timeout slightly higher than the heartbeat interval (RAFT_Z_TIME)
+	heartbeatTimeout := time.Duration(RAFT_X_TIME+rand.Intn(RAFT_Y_MAX)+RAFT_Y_MIN) * time.Millisecond
+	
+	s.heartbeat_timer = time.AfterFunc(heartbeatTimeout, func() {
+		s.leader = nil
+		s.ResetElectionTimer(server, id)
+		s.StartElection(server, id)
+	})
+}
+
 // Start a new election
 func (s *RaftState) StartElection(server *rpc.Client, id int) {
-	// Only start election if still a follower (or candidate with expired election)
-	if s.role == RoleLeader {
+	// Only start election if still a follower (or candidate with expired election) and leader is nil
+	if s.role == RoleLeader || s.leader != nil {
 		return
 	}
 
@@ -162,6 +187,11 @@ func (s *RaftState) StartElection(server *rpc.Client, id int) {
 
 // Handle vote responses
 func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
+	// Check if a leader already exists
+	if s.leader != nil {
+		return
+	}
+
 	// If received a higher term, revert to follower
 	if resp.Term > s.term {
 		s.term = resp.Term
@@ -239,6 +269,9 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 
 		// Reset election timer
 		s.ResetElectionTimer(server, id)
+		
+		// Reset heartbeat timer
+		s.ResetHeartbeatTimer(server, id)
 
 		// fmt.Printf("Node %d: Received heartbeat from leader %d (term %d)\n",
 		// 	id, heartbeat.LeaderId, heartbeat.Term)
@@ -246,11 +279,8 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 }
 
 func (s *RaftState) GetLeader() *int {
-	// I LOVE GO
-	if s.leader == nil {
-		return nil
-	}
-	l := new(int)
-	*l = *s.leader
-	return l
+    if s.leader == nil {
+        return nil
+    }
+    return s.leader
 }

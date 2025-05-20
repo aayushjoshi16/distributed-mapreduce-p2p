@@ -24,7 +24,16 @@ const (
 	Z_TIME_MIN    = 30
 )
 
-var FILES = [...]string{"data/pg-being_ernest.txt", "data/pg-metamorphosis.txt"}
+var FILES = [...]string{
+	"data/19626.txt",
+	"data/pg-being_ernest.txt",
+	"data/pg-metamorphosis.txt",
+	"data/pg84.txt",
+	"data/pg1342.txt",
+	"data/pg1513.txt",
+	"data/pg2701.txt",
+	"data/pg16389.txt",
+}
 
 func detectFailures(membership *gossip.Membership) {
 	currTime := time.Now()
@@ -157,12 +166,15 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 		case mapreduce.GetTaskArgs:
 			// should only recieve this if leader
 			if s.tracker == nil {
-				s.tracker = mapreduce.MakeMaster([]string{"./data/pg-metamorphosis.txt", "./data/pg-being_ernest.txt"}, 8)
+				s.tracker = mapreduce.MakeMaster(FILES[:], 8)
 			}
 			reply := mapreduce.GetTaskReply{}
 			s.tracker.GetTask(smsg, &reply, s.id)
 			shared.SendMessage(server, smsg.SenderId, reply)
 		case mapreduce.ReportTaskArgs:
+			if s.tracker == nil {
+				s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+			}
 			s.tracker.ReportTaskDone(smsg, s.id)
 		case mapreduce.GetTaskReply:
 			s.taskChan <- smsg
@@ -187,25 +199,26 @@ func printMembership(m gossip.Membership) {
 }
 
 func (s *ClientState) reportTaskComplete(server *rpc.Client, taskType mapreduce.TaskPhase, taskID int) {
-	if server == nil {
-		fmt.Printf("Node %d: Error - RPC client is nil\n", s.id)
-		return
-	}
+    if server == nil {
+        fmt.Printf("Node %d: Error - RPC client is nil\n", s.id)
+        return
+    }
 
-	masterId := s.raft.GetLeader()
+    masterId := s.raft.GetLeader()
+    if masterId == nil {
+        fmt.Printf("Node %d: Error - No leader available when reporting task %d completion\n", s.id, taskID)
+        s.isActive = false  // Stop the worker since there's no leader
+        return
+    }
 
-	args := mapreduce.ReportTaskArgs{
-		TaskType: taskType,
-		TaskID:   taskID,
-		SenderId: s.id,
-	}
-	// error handling smirror handling
-	// reply := mapreduce.ReportTaskReply{}
+    args := mapreduce.ReportTaskArgs{
+        TaskType: taskType,
+        TaskID:   taskID,
+        SenderId: s.id,
+    }
 
-	shared.SendMessage(server, *masterId, args)
-
-	fmt.Printf("Node %d: Successfully reported completion of task %d\n", s.id, taskID)
-
+    shared.SendMessage(server, *masterId, args)
+    fmt.Printf("Node %d: Successfully reported completion of task %d\n", s.id, taskID)
 }
 
 func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
