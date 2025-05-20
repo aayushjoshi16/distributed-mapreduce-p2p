@@ -59,6 +59,7 @@ type GetTaskReply struct {
 type ReportTaskArgs struct {
 	TaskType TaskPhase
 	TaskID   int
+	SenderId int
 }
 
 type MasterTask struct {
@@ -79,7 +80,9 @@ type TaskLogEntry struct {
 	Phase     TaskPhase  `json:"phase"`
 	TaskID    int        `json:"task_id"`
 	FileName  string     `json:"file_name,omitempty"`
-	Status    TaskStatus `json:"status"` // "idle", "in_progress", "completed"
+	Status    TaskStatus `json:"status"` 
+	LeaderID  int        `json:"leader_id"`
+	WorkerID  int        `json:"worker_id"`
 	Timestamp time.Time  `json:"timestamp"`
 }
 
@@ -110,7 +113,7 @@ func MakeMaster(files []string, nReduce int) *MasterTask {
 	return m
 }
 
-func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
+func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply, leaderID int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -123,29 +126,31 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 	}
 
 	if m.phase == MapPhase {
-		for i, status := range m.mapStatus {
-			if status == Idle ||
-				(status == InProgress && time.Since(m.mapStartTime[i]) > 10*time.Second) {
-				m.mapStatus[i] = InProgress
-				m.mapStartTime[i] = time.Now()
+        for i, status := range m.mapStatus {
+            if status == Idle ||
+                (status == InProgress && time.Since(m.mapStartTime[i]) > 10*time.Second) {
+                m.mapStatus[i] = InProgress
+                m.mapStartTime[i] = time.Now()
 
-				if i < len(m.files) {
-					*reply = GetTaskReply{
-						TaskType:  MapPhase,
-						FileName:  m.files[i],
-						MapTaskID: i,
-						NReduce:   m.nReduce,
-						NMap:      len(m.files),
-					}
-					logTask(TaskLogEntry{
-						Phase:     "map",
-						TaskID:    i,
-						FileName:  m.files[i],
-						Status:    "in_progress",
-						Timestamp: time.Now(),
-					})
-					fmt.Printf("Assigning map task %d with file %s\n", i, m.files[i])
-					return nil
+                if i < len(m.files) {
+                    *reply = GetTaskReply{
+                        TaskType:  MapPhase,
+                        FileName:  m.files[i],
+                        MapTaskID: i,
+                        NReduce:   m.nReduce,
+                        NMap:      len(m.files),
+                    }
+                    logTask(TaskLogEntry{
+                        Phase:     MapPhase,
+                        TaskID:    i,
+                        FileName:  m.files[i],
+                        Status:    InProgress,
+                        LeaderID:  leaderID,
+                        WorkerID:  args.SenderId,
+                        Timestamp: time.Now(),
+                    })
+                    fmt.Printf("Assigning map task %d with file %s to worker %d\n", i, m.files[i], args.SenderId)
+                    return nil
 				} else {
 					fmt.Printf("Warning: Attempted to access file index %d, but only have %d files\n",
 						i, len(m.files))
@@ -168,24 +173,26 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 	}
 
 	if m.phase == ReducePhase {
-		for i, status := range m.reduceStatus {
-			if status == Idle ||
-				(status == InProgress && time.Since(m.reduceStartTime[i]) > 10*time.Second) {
-				m.reduceStatus[i] = InProgress
-				m.reduceStartTime[i] = time.Now()
+        for i, status := range m.reduceStatus {
+            if status == Idle ||
+                (status == InProgress && time.Since(m.reduceStartTime[i]) > 10*time.Second) {
+                m.reduceStatus[i] = InProgress
+                m.reduceStartTime[i] = time.Now()
 
-				*reply = GetTaskReply{
-					TaskType:     ReducePhase,
-					ReduceTaskID: i,
-					NReduce:      m.nReduce,
-				}
-				logTask(TaskLogEntry{
-					Phase:     "reduce",
-					TaskID:    i,
-					Status:    "in_progress",
-					Timestamp: time.Now(),
-				})
-				return nil
+                *reply = GetTaskReply{
+                    TaskType:     ReducePhase,
+                    ReduceTaskID: i,
+                    NReduce:      m.nReduce,
+                }
+                logTask(TaskLogEntry{
+                    Phase:     ReducePhase,
+                    TaskID:    i,
+                    Status:    InProgress,
+                    LeaderID:  leaderID,
+                    WorkerID:  args.SenderId,
+                    Timestamp: time.Now(),
+                })
+                return nil
 			}
 
 		}
@@ -200,27 +207,26 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 	return errors.New("no tasks available")
 }
 
-func (m *MasterTask) ReportTaskDone(args ReportTaskArgs) error {
+func (m *MasterTask) ReportTaskDone(args ReportTaskArgs, leaderID int) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+    defer m.mu.Unlock()
 
-	switch args.TaskType {
-	case MapPhase:
-		if args.TaskID < 0 || args.TaskID >= len(m.mapStatus) {
-			return errors.New("invalid MapTaskID")
-		}
-		m.mapStatus[args.TaskID] = Completed
-
-		all := true
-		for _, s := range m.mapStatus {
-			if s != Completed {
-				all = false
-				break
-			}
-		}
-		if all {
-			m.phase = ReducePhase
-		}
+    switch args.TaskType {
+    case MapPhase:
+        if args.TaskID < 0 || args.TaskID >= len(m.mapStatus) {
+            return errors.New("invalid MapTaskID")
+        }
+        m.mapStatus[args.TaskID] = Completed
+        
+        // Log task completion
+        logTask(TaskLogEntry{
+            Phase:     MapPhase,
+            TaskID:    args.TaskID,
+            Status:    Completed,
+            LeaderID:  leaderID,
+            WorkerID:  args.SenderId, // You'll need to add SenderId to ReportTaskArgs
+            Timestamp: time.Now(),
+        })
 
 	case ReducePhase:
 		if args.TaskID < 0 || args.TaskID >= len(m.reduceStatus) {

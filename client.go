@@ -160,10 +160,10 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 				s.tracker = mapreduce.MakeMaster([]string{"./data/pg-metamorphosis.txt", "./data/pg-being_ernest.txt"}, 8)
 			}
 			reply := mapreduce.GetTaskReply{}
-			s.tracker.GetTask(smsg, &reply)
+			s.tracker.GetTask(smsg, &reply, s.id)
 			shared.SendMessage(server, smsg.SenderId, reply)
 		case mapreduce.ReportTaskArgs:
-			s.tracker.ReportTaskDone(smsg)
+			s.tracker.ReportTaskDone(smsg, s.id)
 		case mapreduce.GetTaskReply:
 			s.taskChan <- smsg
 		}
@@ -197,6 +197,7 @@ func (s *ClientState) reportTaskComplete(server *rpc.Client, taskType mapreduce.
 	args := mapreduce.ReportTaskArgs{
 		TaskType: taskType,
 		TaskID:   taskID,
+		SenderId: s.id,
 	}
 	// error handling smirror handling
 	// reply := mapreduce.ReportTaskReply{}
