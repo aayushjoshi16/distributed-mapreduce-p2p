@@ -1,6 +1,7 @@
 package mapreduce
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,13 +27,31 @@ const (
 )
 
 var taskPhaseToStr = map[TaskPhase]string{
-	MapPhase:    "phase",
+	MapPhase:    "map",
 	ReducePhase: "reduce",
 	DonePhase:   "done",
 }
 
+var strToTaskPhase = invertMap(taskPhaseToStr)
+
 func (p TaskPhase) MarshalJSON() ([]byte, error) {
+	str, ok := taskPhaseToStr[p]
+	if !ok {
+		str = "unknown"
+	}
 	return json.Marshal(str)
+}
+
+func (p *TaskPhase) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	if val, ok := strToTaskPhase[str]; ok {
+		*p = val
+		return nil
+	}
+	return fmt.Errorf("invalid task phase: %q", str)
 }
 
 type TaskStatus int
@@ -42,6 +61,34 @@ const (
 	InProgress
 	Completed
 )
+
+var taskStatusToStr = map[TaskStatus]string{
+	Idle:       "idle",
+	InProgress: "in_progress",
+	Completed:  "completed",
+}
+
+var strToTaskStatus = invertMap(taskStatusToStr)
+
+func (s TaskStatus) MarshalJSON() ([]byte, error) {
+	str, ok := taskStatusToStr[s]
+	if !ok {
+		str = "unknown"
+	}
+	return json.Marshal(str)
+}
+
+func (s *TaskStatus) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	if val, ok := strToTaskStatus[str]; ok {
+		*s = val
+		return nil
+	}
+	return fmt.Errorf("invalid task status: %q", str)
+}
 
 type GetTaskArgs struct {
 	SenderId int
@@ -107,12 +154,45 @@ func MakeMaster(files []string, nReduce int) *MasterTask {
 		mapStartTime:    make([]time.Time, len(files)),
 		reduceStartTime: make([]time.Time, nReduce),
 	}
+	m.ApplyTaskLogs("task_log.jsonl")
 	return m
+}
+
+func (m *MasterTask) ApplyTaskLogs(filename string) {
+	file, err := os.OpenFile(filename, os.O_RDONLY, 0644)
+	if err != nil {
+		fmt.Printf("Failed to write log: %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		var le TaskLogEntry
+		if err := json.Unmarshal(scanner.Bytes(), &le); err != nil {
+			return
+		}
+		if le.Phase == MapPhase {
+			m.mapStatus[le.TaskID] = le.Status
+			if le.Status == InProgress {
+				m.mapStartTime[le.TaskID] = le.Timestamp
+			}
+		} else if le.Phase == ReducePhase {
+			m.reduceStatus[le.TaskID] = le.Status
+			if le.Status == InProgress {
+				m.reduceStartTime[le.TaskID] = le.Timestamp
+			}
+		}
+		m.phase = le.Phase
+	}
 }
 
 func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	time.Sleep(500 * time.Millisecond)
 
 	if m.phase == DonePhase {
 		*reply = GetTaskReply{
@@ -138,10 +218,10 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 						NMap:      len(m.files),
 					}
 					logTask(TaskLogEntry{
-						Phase:     "map",
+						Phase:     MapPhase,
 						TaskID:    i,
 						FileName:  m.files[i],
-						Status:    "in_progress",
+						Status:    InProgress,
 						Timestamp: time.Now(),
 					})
 					fmt.Printf("Assigning map task %d with file %s\n", i, m.files[i])
@@ -180,9 +260,9 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 					NReduce:      m.nReduce,
 				}
 				logTask(TaskLogEntry{
-					Phase:     "reduce",
+					Phase:     ReducePhase,
 					TaskID:    i,
-					Status:    "in_progress",
+					Status:    InProgress,
 					Timestamp: time.Now(),
 				})
 				return nil
@@ -211,6 +291,14 @@ func (m *MasterTask) ReportTaskDone(args ReportTaskArgs) error {
 		}
 		m.mapStatus[args.TaskID] = Completed
 
+		logTask(TaskLogEntry{
+			Phase:     m.phase,
+			TaskID:    args.TaskID,
+			FileName:  m.files[args.TaskID],
+			Status:    m.mapStatus[args.TaskID],
+			Timestamp: time.Now(),
+		})
+
 		all := true
 		for _, s := range m.mapStatus {
 			if s != Completed {
@@ -227,6 +315,13 @@ func (m *MasterTask) ReportTaskDone(args ReportTaskArgs) error {
 			return errors.New("invalid ReduceTaskID")
 		}
 		m.reduceStatus[args.TaskID] = Completed
+
+		logTask(TaskLogEntry{
+			Phase:     m.phase,
+			TaskID:    args.TaskID,
+			Status:    m.reduceStatus[args.TaskID],
+			Timestamp: time.Now(),
+		})
 
 		all := true
 		for _, s := range m.reduceStatus {

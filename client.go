@@ -24,7 +24,16 @@ const (
 	Z_TIME_MIN    = 30
 )
 
-var FILES = [...]string{"data/pg-being_ernest.txt", "data/pg-metamorphosis.txt"}
+var FILES = [...]string{
+	"data/19626.txt",
+	"data/pg-being_ernest.txt",
+	"data/pg-metamorphosis.txt",
+	"data/pg84.txt",
+	"data/pg1342.txt",
+	"data/pg1513.txt",
+	"data/pg2701.txt",
+	"data/pg16389.txt",
+}
 
 func detectFailures(membership *gossip.Membership) {
 	currTime := time.Now()
@@ -157,12 +166,15 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 		case mapreduce.GetTaskArgs:
 			// should only recieve this if leader
 			if s.tracker == nil {
-				s.tracker = mapreduce.MakeMaster([]string{"./data/pg-metamorphosis.txt", "./data/pg-being_ernest.txt"}, 8)
+				s.tracker = mapreduce.MakeMaster(FILES[:], 8)
 			}
 			reply := mapreduce.GetTaskReply{}
 			s.tracker.GetTask(smsg, &reply)
 			shared.SendMessage(server, smsg.SenderId, reply)
 		case mapreduce.ReportTaskArgs:
+			if s.tracker == nil {
+				s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+			}
 			s.tracker.ReportTaskDone(smsg)
 		case mapreduce.GetTaskReply:
 			s.taskChan <- smsg
