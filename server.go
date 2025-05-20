@@ -11,21 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/rpc"
-	"time"
 )
-
-func detectAndReset(nodes *gossip.Membership, master *mapreduce.MasterTask) {
-	// Check for failures and reset the nodes
-	for {
-		time.Sleep(2 * time.Second)
-
-		for id, node := range nodes.Members {
-			if !node.Alive {
-				master.HandleWorkerFailure(id)
-			}
-		}
-	}
-}
 
 func main() {
 	if _, err := os.Stat("./data"); err != nil {

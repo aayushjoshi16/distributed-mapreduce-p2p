@@ -62,6 +62,7 @@ type ClientState struct {
 	membership gossip.Membership
 	raft       *raft.RaftState
 	isActive   bool
+	isDone     bool
 	taskChan   chan mapreduce.GetTaskReply
 	tracker    *mapreduce.MasterTask
 }
@@ -76,6 +77,7 @@ func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
 		membership: membership,
 		raft:       raft,
 		isActive:   false,
+		isDone:     false,
 		taskChan:   make(chan mapreduce.GetTaskReply, 1),
 		tracker:    nil,
 	}
@@ -158,7 +160,7 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			// raft_timer.Reset(RAFT_X_TIME*time.Second + shared.RandomLeadTimeout())
 			s.raft.HandleLeaderHeartbeat(server, smsg, s.id)
 			// we have a leader GO GO GO
-			if !s.isActive {
+			if !s.isActive && !s.isDone {
 				// technically there is a race condition here. I really hope it doesn't matter.
 				s.isActive = true
 				go s.runMapReduceWorker(server)
@@ -231,7 +233,7 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 	}
 	fmt.Printf("Node %d: Worker found leader %d\n", s.id, *masterId)
 
-	for s.isActive {
+	for !s.isDone {
 		args := mapreduce.GetTaskArgs{
 			SenderId: s.id,
 		}
@@ -287,7 +289,7 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 
 		case mapreduce.DonePhase:
 			fmt.Printf("Node %d: All tasks are done\n", s.id)
-			time.Sleep(5 * time.Second)
+			// time.Sleep(5 * time.Second)
 
 			if totalReduce > 0 {
 				//fmt.Printf("Node %d: Leader detected, merging outputs...\n", s.id)
@@ -298,14 +300,15 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 					fmt.Printf("Node %d: Successfully merged outputs to mr-out-final\n", s.id)
 				}
 			}
-			time.Sleep(5 * time.Second)
+			// time.Sleep(5 * time.Second)
+			s.isDone = true
 			s.isActive = false
 			fmt.Printf("Node %d: Exiting MapReduce worker\n", s.id)
 			return
 
 		default:
 			fmt.Printf("Node %d: Unknown task type %d\n", s.id, reply.TaskType)
-			time.Sleep(1 * time.Second)
+			// time.Sleep(1 * time.Second)
 		}
 
 		// Small delay between task requests
