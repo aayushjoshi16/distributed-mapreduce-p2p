@@ -152,13 +152,13 @@ func MergeReduceOutputs(nReduce int, outputFile string) error {
 	defer outfile.Close()
 
 	wordCounts := make(map[string]int)
-	
-	for r := 0; r < nReduce; r++ {
+
+	for r := range nReduce {
 		filename := fmt.Sprintf("mr-out-%d", r)
 		if _, err := os.Stat(filename); os.IsNotExist(err) {
 			continue
 		}
-		
+
 		content, err := os.ReadFile(filename)
 
 		if err != nil {
@@ -170,7 +170,7 @@ func MergeReduceOutputs(nReduce int, outputFile string) error {
 			if len(line) == 0 {
 				continue
 			}
-		
+
 			parts := strings.Fields(line)
 
 			if len(parts) >= 2 {
@@ -180,11 +180,11 @@ func MergeReduceOutputs(nReduce int, outputFile string) error {
 					fmt.Printf("Warning: Invalid count format for word %s: %s\n", word, parts[1])
 					continue
 				}
-				
+
 				// Add to the existing count
 				wordCounts[word] += count
 			}
-		}	
+		}
 	}
 
 	var words []string
@@ -196,7 +196,7 @@ func MergeReduceOutputs(nReduce int, outputFile string) error {
 	for _, word := range words {
 		fmt.Fprintf(outfile, "%s %d\n", word, wordCounts[word])
 	}
-	
+
 	return nil
 }
 

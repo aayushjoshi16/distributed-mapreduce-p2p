@@ -117,6 +117,7 @@ type GetTaskReply struct {
 	ReduceTaskID int
 	NReduce      int
 	NMap         int
+	NoTasks      bool // really jank garbage
 }
 
 type ReportTaskArgs struct {
@@ -177,7 +178,6 @@ func MakeMaster(files []string, nReduce int) *MasterTask {
 func (m *MasterTask) ApplyTaskLogs(filename string) {
 	file, err := os.OpenFile(filename, os.O_RDONLY, 0644)
 	if err != nil {
-		fmt.Printf("Failed to write log: %v\n", err)
 		return
 	}
 	defer file.Close()
@@ -204,7 +204,7 @@ func (m *MasterTask) ApplyTaskLogs(filename string) {
 		m.phase = le.Phase
 	}
 
-	fmt.Printf("Restored tracker %+v\n", *m)
+	fmt.Printf("Restored tracker %+v\n", m)
 }
 
 func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
@@ -212,14 +212,6 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 	defer m.mu.Unlock()
 
 	time.Sleep(500 * time.Millisecond)
-
-	if m.phase == DonePhase {
-		*reply = GetTaskReply{
-			TaskType: DonePhase,
-			NMap:     len(m.files),
-		}
-		return nil
-	}
 
 	if m.phase == MapPhase {
 		for i, status := range m.mapStatus {
@@ -261,9 +253,7 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 		if allDone && m.phase == MapPhase {
 			m.phase = ReducePhase
 		}
-	}
-
-	if m.phase == ReducePhase {
+	} else if m.phase == ReducePhase {
 		for i, status := range m.reduceStatus {
 			if status == Idle {
 				m.reduceStatus[i] = InProgress
@@ -278,21 +268,21 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 					TaskID: i,
 					Status: InProgress,
 				})
+				fmt.Printf("Assigning reduce task %d\n", i)
 				return nil
 			}
 
 		}
-
-		if m.phase == DonePhase {
-			*reply = GetTaskReply{
-				TaskType: DonePhase,
-			}
-			logTask(TaskLogEntry{
-				Phase: DonePhase,
-			})
-			return nil
+	} else if m.phase == DonePhase {
+		*reply = GetTaskReply{
+			TaskType: DonePhase,
 		}
+		logTask(TaskLogEntry{
+			Phase: DonePhase,
+		})
+		return nil
 	}
+
 	return errors.New("no tasks available")
 }
 
@@ -345,11 +335,20 @@ func (m *MasterTask) ReportTaskDone(args ReportTaskArgs) error {
 			}
 		}
 		if all {
+			//fmt.Printf("Node %d: Leader detected, merging outputs...\n", s.id)
+			err := MergeReduceOutputs(m.nReduce, "mr-out-final")
+			if err != nil {
+				fmt.Printf("Error merging outputs: %v\n", err)
+			} else {
+				fmt.Printf("Successfully merged outputs to mr-out-final\n")
+			}
+
 			m.phase = DonePhase
 		}
 	default:
 		return errors.New("unknown TaskType")
 	}
+
 	return nil
 }
 

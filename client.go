@@ -167,17 +167,25 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			}
 		case mapreduce.GetTaskArgs:
 			// should only recieve this if leader
-			if s.tracker == nil {
-				s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+			if s.raft.Role == raft.RoleLeader {
+				if s.tracker == nil {
+					s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+				}
+				reply := mapreduce.GetTaskReply{}
+				if err := s.tracker.GetTask(smsg, &reply); err != nil {
+					reply.NoTasks = true
+				} else {
+					reply.NoTasks = false
+				}
+				shared.SendMessage(server, smsg.SenderId, reply)
 			}
-			reply := mapreduce.GetTaskReply{}
-			s.tracker.GetTask(smsg, &reply)
-			shared.SendMessage(server, smsg.SenderId, reply)
 		case mapreduce.ReportTaskArgs:
-			if s.tracker == nil {
-				s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+			if s.raft.Role == raft.RoleLeader {
+				if s.tracker == nil {
+					s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+				}
+				s.tracker.ReportTaskDone(smsg)
 			}
-			s.tracker.ReportTaskDone(smsg)
 		case mapreduce.GetTaskReply:
 			s.taskChan <- smsg
 		}
@@ -224,8 +232,6 @@ func (s *ClientState) reportTaskComplete(server *rpc.Client, taskType mapreduce.
 func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 	fmt.Printf("Node %d: Starting MapReduce worker\n", s.id)
 
-	totalReduce := 0
-
 	masterId := s.raft.GetLeader()
 	if masterId == nil {
 		s.isActive = false
@@ -242,73 +248,59 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 		shared.SendMessage(server, *masterId, args)
 		reply := <-s.taskChan
 
-		if reply.NReduce > 0 {
-			totalReduce = reply.NReduce
-		}
+		if !reply.NoTasks {
+			switch reply.TaskType {
+			case mapreduce.MapPhase:
+				fmt.Printf("Node %d: Running Map Task %d on file %s\n", s.id, reply.MapTaskID, reply.FileName)
 
-		switch reply.TaskType {
-		case mapreduce.MapPhase:
-			fmt.Printf("Node %d: Running Map Task %d on file %s\n", s.id, reply.MapTaskID, reply.FileName)
-
-			// Verify file exists
-			if _, err := os.Stat(reply.FileName); os.IsNotExist(err) {
-				fmt.Printf("Node %d: File does not exist: %s\n", s.id, reply.FileName)
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			err := mapreduce.ExecuteMTask(reply.FileName, reply.MapTaskID, reply.NReduce, wc.Map)
-			if err != nil {
-				fmt.Printf("Node %d: Error executing map task %d: %v\n", s.id, reply.MapTaskID, err)
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			fmt.Printf("Node %d: Completed Map Task %d\n", s.id, reply.MapTaskID)
-			s.reportTaskComplete(server, mapreduce.MapPhase, reply.MapTaskID)
-
-		case mapreduce.ReducePhase:
-			fmt.Printf("Node %d: Running Reduce Task %d\n", s.id, reply.ReduceTaskID)
-
-			// Use the correct NMap value
-			nMap := reply.NMap
-			if nMap == 0 {
-				fmt.Printf("Node %d: Warning - NMap is 0, using 2 as default\n", s.id)
-				nMap = 2 // Default to 2 as a fallback
-			}
-
-			err := mapreduce.ExecuteRTask(reply.ReduceTaskID, nMap, wc.Reduce)
-			if err != nil {
-				fmt.Printf("Node %d: Error executing reduce task %d: %v\n", s.id, reply.ReduceTaskID, err)
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			fmt.Printf("Node %d: Completed Reduce Task %d\n", s.id, reply.ReduceTaskID)
-			s.reportTaskComplete(server, mapreduce.ReducePhase, reply.ReduceTaskID)
-
-		case mapreduce.DonePhase:
-			fmt.Printf("Node %d: All tasks are done\n", s.id)
-			// time.Sleep(5 * time.Second)
-
-			if totalReduce > 0 {
-				//fmt.Printf("Node %d: Leader detected, merging outputs...\n", s.id)
-				err := mapreduce.MergeReduceOutputs(totalReduce, "mr-out-final")
-				if err != nil {
-					fmt.Printf("Node %d: Error merging outputs: %v\n", s.id, err)
-				} else {
-					fmt.Printf("Node %d: Successfully merged outputs to mr-out-final\n", s.id)
+				// Verify file exists
+				if _, err := os.Stat(reply.FileName); os.IsNotExist(err) {
+					fmt.Printf("Node %d: File does not exist: %s\n", s.id, reply.FileName)
+					time.Sleep(1 * time.Second)
+					continue
 				}
-			}
-			// time.Sleep(5 * time.Second)
-			s.isDone = true
-			s.isActive = false
-			fmt.Printf("Node %d: Exiting MapReduce worker\n", s.id)
-			return
 
-		default:
-			fmt.Printf("Node %d: Unknown task type %d\n", s.id, reply.TaskType)
-			// time.Sleep(1 * time.Second)
+				err := mapreduce.ExecuteMTask(reply.FileName, reply.MapTaskID, reply.NReduce, wc.Map)
+				if err != nil {
+					fmt.Printf("Node %d: Error executing map task %d: %v\n", s.id, reply.MapTaskID, err)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				fmt.Printf("Node %d: Completed Map Task %d\n", s.id, reply.MapTaskID)
+				s.reportTaskComplete(server, mapreduce.MapPhase, reply.MapTaskID)
+
+			case mapreduce.ReducePhase:
+				fmt.Printf("Node %d: Running Reduce Task %d\n", s.id, reply.ReduceTaskID)
+
+				// Use the correct NMap value
+				nMap := reply.NMap
+				if nMap == 0 {
+					fmt.Printf("Node %d: Warning - NMap is 0, using 2 as default\n", s.id)
+					nMap = 2 // Default to 2 as a fallback
+				}
+
+				err := mapreduce.ExecuteRTask(reply.ReduceTaskID, nMap, wc.Reduce)
+				if err != nil {
+					fmt.Printf("Node %d: Error executing reduce task %d: %v\n", s.id, reply.ReduceTaskID, err)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				fmt.Printf("Node %d: Completed Reduce Task %d\n", s.id, reply.ReduceTaskID)
+				s.reportTaskComplete(server, mapreduce.ReducePhase, reply.ReduceTaskID)
+
+			case mapreduce.DonePhase:
+				fmt.Printf("Node %d: All tasks are done\n", s.id)
+				s.isDone = true
+				s.isActive = false
+				fmt.Printf("Node %d: Exiting MapReduce worker\n", s.id)
+				return
+
+			default:
+				fmt.Printf("Node %d: Unknown task type %d\n", s.id, reply.TaskType)
+				// time.Sleep(1 * time.Second)
+			}
 		}
 
 		// Small delay between task requests

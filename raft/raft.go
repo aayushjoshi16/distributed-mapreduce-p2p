@@ -16,8 +16,8 @@ const (
 	RoleLeader
 
 	RAFT_X_TIME = 1000
-	RAFT_Y_MIN  = 150
-	RAFT_Y_MAX  = 300
+	RAFT_Y_MIN  = 1000
+	RAFT_Y_MAX  = 1500
 	RAFT_Z_TIME = 250
 )
 
@@ -37,7 +37,7 @@ type LeaderHeartbeat struct {
 }
 
 type RaftState struct {
-	role           Role
+	Role           Role
 	election_timer *time.Timer
 	term           int
 	cur_vote       *int
@@ -47,7 +47,7 @@ type RaftState struct {
 
 func NewRaftState(server *rpc.Client, id int) *RaftState {
 	s := RaftState{
-		role:           RoleFollower,
+		Role:           RoleFollower,
 		election_timer: nil,
 		term:           0,
 		cur_vote:       nil,
@@ -70,12 +70,12 @@ func (s *RaftState) ShouldRequestVote(server *rpc.Client, args shared.RequestVot
 	// If new term, update current term and revert to follower
 	if args.Term > s.term {
 		s.term = args.Term
-		s.role = RoleFollower
+		s.Role = RoleFollower
 		s.cur_vote = nil
 	}
 
 	// Skip vote if a candidate or leader
-	if s.role == RoleLeader || s.role == RoleCandidate {
+	if s.Role == RoleLeader || s.Role == RoleCandidate {
 		return false
 	}
 
@@ -130,14 +130,14 @@ func (s *RaftState) ResetElectionTimer(server *rpc.Client, id int) {
 // Start a new election
 func (s *RaftState) StartElection(server *rpc.Client, id int) {
 	// Only start election if still a follower (or candidate with expired election)
-	if s.role == RoleLeader {
+	if s.Role == RoleLeader {
 		return
 	}
 
 	// Increment term and vote for self
 	s.term++
 	s.cur_vote = &id
-	s.role = RoleCandidate
+	s.Role = RoleCandidate
 	s.num_votes = 1 // Vote for self
 
 	fmt.Printf("Node %d: Starting election for term %d\n", id, s.term)
@@ -165,7 +165,7 @@ func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
 	// If received a higher term, revert to follower
 	if resp.Term > s.term {
 		s.term = resp.Term
-		s.role = RoleFollower
+		s.Role = RoleFollower
 		s.cur_vote = nil
 		s.num_votes = 0 // Reset votes
 		return
@@ -174,7 +174,7 @@ func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
 	// fmt.Printf("Node %d: Received vote response for term %d role %s and vote %s\n", self_node.ID, resp.Term, role, resp.Vote)
 
 	// Only count votes if still a candidate
-	if s.role == RoleCandidate && s.term == resp.Term && resp.Vote {
+	if s.Role == RoleCandidate && s.term == resp.Term && resp.Vote {
 		s.num_votes++
 
 		fmt.Printf("Node %d: Total votes: %d\n", id, s.num_votes)
@@ -182,11 +182,11 @@ func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
 		// If we have majority, become leader
 		if s.num_votes > shared.MAX_NODES/2 {
 			// if votes == 2 {
-			if s.role != RoleCandidate {
+			if s.Role != RoleCandidate {
 				return
 			}
 
-			s.role = RoleLeader
+			s.Role = RoleLeader
 			fmt.Printf("Node %d: Became leader for term %d\n", id, s.term)
 
 			// Stop election timer as leaders don't timeout
@@ -199,7 +199,7 @@ func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
 
 // Send leader heartbeat to all nodes
 func (s *RaftState) SendHeartbeats(server *rpc.Client, id int) {
-	if s.role != RoleLeader {
+	if s.Role != RoleLeader {
 		return
 	}
 
@@ -232,7 +232,7 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 		}
 
 		// Reset to follower (even if already follower)
-		s.role = RoleFollower
+		s.Role = RoleFollower
 
 		// Assign as current leader
 		s.leader = &heartbeat.LeaderId
