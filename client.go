@@ -274,13 +274,13 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 				fmt.Printf("Node %d: Running Reduce Task %d\n", s.id, reply.ReduceTaskID)
 
 				// Use the correct NMap value
-				nMap := reply.NMap
-				if nMap == 0 {
-					fmt.Printf("Node %d: Warning - NMap is 0, using 2 as default\n", s.id)
-					nMap = 2 // Default to 2 as a fallback
+				nReduce := reply.NReduce
+				if nReduce == 0 {
+					fmt.Printf("Node %d: Warning - NMap is 0\n", s.id)
+					continue
 				}
 
-				err := mapreduce.ExecuteRTask(reply.ReduceTaskID, nMap, wc.Reduce)
+				err := mapreduce.ExecuteRTask(reply.ReduceTaskID, nReduce, wc.Reduce)
 				if err != nil {
 					fmt.Printf("Node %d: Error executing reduce task %d: %v\n", s.id, reply.ReduceTaskID, err)
 					time.Sleep(1 * time.Second)
