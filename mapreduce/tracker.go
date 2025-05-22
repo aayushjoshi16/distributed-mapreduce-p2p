@@ -176,6 +176,8 @@ func MakeMaster(files []string, nReduce int) *MasterTask {
 }
 
 func (m *MasterTask) ApplyTaskLogs(filename string) {
+	time.Sleep(500 * time.Millisecond)
+
 	file, err := os.OpenFile(filename, os.O_RDONLY, 0644)
 	if err != nil {
 		return
@@ -201,10 +203,13 @@ func (m *MasterTask) ApplyTaskLogs(filename string) {
 			// 	m.reduceStartTime[le.TaskID] = le.Timestamp
 			// }
 		}
+
+		// print the log entry to the console
+		fmt.Printf("log entry: %+v\n", le)
 		m.phase = le.Phase
 	}
 
-	fmt.Printf("Restored tracker %+v\n", m)
+	fmt.Printf("Restored tracker: \n%+v\n", m)
 }
 
 func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
@@ -212,6 +217,11 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 	defer m.mu.Unlock()
 
 	time.Sleep(500 * time.Millisecond)
+
+	fmt.Printf("called by node %d\n", args.SenderId)
+	// Print the MasterTask mapphase and reduce phase states
+	// fmt.Printf("MasterTask mapStatus: %+v\n", m.mapStatus)
+	// fmt.Printf("MasterTask reduceStatus: %+v\n", m.reduceStatus)
 
 	if m.phase == MapPhase {
 		for i, status := range m.mapStatus {

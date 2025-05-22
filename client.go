@@ -128,7 +128,10 @@ func main() {
 
 	state := NewState(id, self_node, server)
 
-	time.AfterFunc(time.Millisecond*POLL_INTERVAL, func() { state.handlePoll(server) })
+	time.AfterFunc(time.Millisecond*POLL_INTERVAL, func() {
+		fmt.Printf("Node %d: Polling...\n", id)
+		state.handlePoll(server)
+	})
 
 	var wg = sync.WaitGroup{}
 	wg.Add(1)
@@ -232,6 +235,10 @@ func (s *ClientState) reportTaskComplete(server *rpc.Client, taskType mapreduce.
 func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 	fmt.Printf("Node %d: Starting MapReduce worker\n", s.id)
 
+	// Skip election timeouts
+	s.raft.PauseElections()
+    defer s.raft.ResumeElections()
+
 	masterId := s.raft.GetLeader()
 	if masterId == nil {
 		s.isActive = false
@@ -240,6 +247,10 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 	fmt.Printf("Node %d: Worker found leader %d\n", s.id, *masterId)
 
 	for !s.isDone {
+		// TEMPORARY
+		time.Sleep(100 * time.Millisecond)
+		fmt.Printf("Iteration...\n")
+
 		args := mapreduce.GetTaskArgs{
 			SenderId: s.id,
 		}

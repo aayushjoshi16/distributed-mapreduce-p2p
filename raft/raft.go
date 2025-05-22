@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/rpc"
 	"time"
+	"sync"
 )
 
 type Role int
@@ -15,7 +16,7 @@ const (
 	RoleCandidate
 	RoleLeader
 
-	RAFT_X_TIME = 1000
+	RAFT_X_TIME = 1500
 	RAFT_Y_MIN  = 1000
 	RAFT_Y_MAX  = 1500
 	RAFT_Z_TIME = 250
@@ -39,6 +40,8 @@ type LeaderHeartbeat struct {
 type RaftState struct {
 	Role           Role
 	election_timer *time.Timer
+	election_mutex sync.RWMutex
+	election_limit int
 	term           int
 	cur_vote       *int
 	num_votes      int
@@ -49,6 +52,7 @@ func NewRaftState(server *rpc.Client, id int) *RaftState {
 	s := RaftState{
 		Role:           RoleFollower,
 		election_timer: nil,
+		election_limit: 5,
 		term:           0,
 		cur_vote:       nil,
 		num_votes:      0,
@@ -56,6 +60,20 @@ func NewRaftState(server *rpc.Client, id int) *RaftState {
 	}
 	s.ResetElectionTimer(server, id)
 	return &s
+}
+
+// PauseElections prevents this node from starting elections by acquiring a write lock
+func (s *RaftState) PauseElections() {
+    s.election_mutex.Lock()
+	s.election_limit = 5
+    fmt.Printf("Election timeout blocked\n")
+}
+
+// ResumeElections allows this node to participate in elections again
+func (s *RaftState) ResumeElections() {
+    s.election_mutex.Unlock()
+	s.election_limit = 0
+    fmt.Printf("Election timeout resumed\n")
 }
 
 // RequestVotes for candidate calling on them
@@ -123,6 +141,26 @@ func (s *RaftState) ResetElectionTimer(server *rpc.Client, id int) {
 
 	// Reset or create the timer
 	s.election_timer = time.AfterFunc(electionTimeout, func() {
+		// Try to acquire read lock - will block if PauseElections is holding write lock
+		if !s.election_mutex.TryRLock() {
+			s.election_limit--
+			fmt.Printf("Node %d: Election timeout skipped (limit: %d)\n", id, s.election_limit)
+
+			// If election limit is reached, release the lock to allow elections
+			if s.election_limit <= 0 {
+				s.election_mutex.Unlock() // Unlock directly instead of calling ResumeElections
+				fmt.Printf("Node %d: Election timeout limit reached, starting election\n", id)
+				// s.StartElection(server, id) // Start an election immediately
+				// return
+			}
+
+			s.ResetElectionTimer(server, id)
+			return
+		}
+		// We got the read lock, so elections are allowed
+		s.election_mutex.RUnlock()
+		
+		fmt.Printf("Node %d: Election timeout\n", id)
 		s.StartElection(server, id)
 	})
 }
