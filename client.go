@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/gob"
 	"fmt"
+	"math/rand"
 
 	// "lab4/mapreduce"
 	"lab4/gossip"
@@ -258,6 +259,12 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 			fmt.Printf("Node %d: No task response from master.", s.id)
 			s.isActive = false
 			break
+		}
+
+		// just like me the node sometimes contemplates suicide
+		if rand.Int31()%20 == 0 {
+			fmt.Println("Simuating crash.")
+			os.Exit(1)
 		}
 
 		if !reply.NoTasks {
