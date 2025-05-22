@@ -1,9 +1,13 @@
 package mapreduce
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
+	ch "lab4/chunks"
 	"lab4/wc"
 	"os"
 	"sort"
@@ -25,22 +29,77 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-func ExecuteMTask(fileName string, mapTaskID int, nReduce int, mapf func(string, string) []wc.KeyValue) error {
-	fmt.Printf("Map task %d: Processing file %s\n", mapTaskID, fileName)
+func readChunk(filename string, start, end int64) (string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	// Seek to the start position
+	_, err = file.Seek(start, 0)
+	if err != nil {
+		return "", err
+	}
+
+	reader := bufio.NewReader(file)
+
+	// Skip until after the first newline
+	var startOffset int64 = start
+	if startOffset > 0 {
+		for {
+			b, err := reader.ReadByte()
+			startOffset++
+			if err != nil {
+				return "", err
+			}
+			if b == '\n' {
+				break
+			}
+		}
+	}
+
+	// Now read from after that newline
+	var buf bytes.Buffer
+	var currentOffset = startOffset
+
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			buf.Write(line)
+			currentOffset += int64(len(line))
+			if currentOffset >= end {
+				break
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", err // return actual error
+		}
+	}
+
+	return buf.String(), nil
+}
+
+func ExecuteMTask(fileName ch.Chunk, mapTaskID int, nReduce int, mapf func(string, string) []wc.KeyValue) error {
+	fmt.Printf("Map task %d: Processing file %v\n", mapTaskID, fileName)
 
 	// Check if file exists
-	if _, err := os.Stat(fileName); os.IsNotExist(err) {
-		return fmt.Errorf("file does not exist: %s", fileName)
+	if _, err := os.Stat(fileName.Filename); os.IsNotExist(err) {
+		return fmt.Errorf("file does not exist: %v", fileName)
 	}
 
 	// Read input file
-	content, err := os.ReadFile(fileName)
+
+	content, err := readChunk(fileName.Filename, fileName.Start, fileName.End)
 	if err != nil {
 		return fmt.Errorf("cannot read file: %v", err)
 	}
 
 	// Apply the map function
-	kva := mapf(fileName, string(content))
+	kva := mapf(fileName.Filename, string(content))
 	fmt.Printf("Map task %d: Generated %d key-value pairs\n", mapTaskID, len(kva))
 
 	// Create buckets for each reduce task

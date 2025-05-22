@@ -254,7 +254,7 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 				fmt.Printf("Node %d: Running Map Task %d on file %s\n", s.id, reply.MapTaskID, reply.FileName)
 
 				// Verify file exists
-				if _, err := os.Stat(reply.FileName); os.IsNotExist(err) {
+				if _, err := os.Stat(reply.FileName.Filename); os.IsNotExist(err) {
 					fmt.Printf("Node %d: File does not exist: %s\n", s.id, reply.FileName)
 					time.Sleep(1 * time.Second)
 					continue
@@ -274,13 +274,13 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 				fmt.Printf("Node %d: Running Reduce Task %d\n", s.id, reply.ReduceTaskID)
 
 				// Use the correct NMap value
-				nReduce := reply.NReduce
-				if nReduce == 0 {
+				nMap := reply.NMap
+				if nMap == 0 {
 					fmt.Printf("Node %d: Warning - NMap is 0\n", s.id)
 					continue
 				}
 
-				err := mapreduce.ExecuteRTask(reply.ReduceTaskID, nReduce, wc.Reduce)
+				err := mapreduce.ExecuteRTask(reply.ReduceTaskID, nMap, wc.Reduce)
 				if err != nil {
 					fmt.Printf("Node %d: Error executing reduce task %d: %v\n", s.id, reply.ReduceTaskID, err)
 					time.Sleep(1 * time.Second)

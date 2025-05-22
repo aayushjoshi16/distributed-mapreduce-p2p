@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	ch "lab4/chunks"
 	"os"
 	"sync"
 	"time"
 )
+
+const TASK_TIMEOUT = 10 * time.Second
 
 func invertMap[K comparable, V comparable](m map[K]V) map[V]K {
 	inverted := make(map[V]K)
@@ -112,7 +115,7 @@ type GetTaskArgs struct {
 
 type GetTaskReply struct {
 	TaskType     TaskPhase
-	FileName     string
+	FileName     ch.Chunk
 	MapTaskID    int
 	ReduceTaskID int
 	NReduce      int
@@ -126,25 +129,25 @@ type ReportTaskArgs struct {
 }
 
 type MasterTask struct {
-	files   []string
+	files   []ch.Chunk
 	nReduce int // number of reduce taks
 
 	mu sync.Mutex
 
-	phase        TaskPhase
-	mapStatus    []TaskStatus
-	reduceStatus []TaskStatus
-	// mapStartTime    []time.Time
-	// reduceStartTime []time.Time
+	phase           TaskPhase
+	mapStatus       []TaskStatus
+	reduceStatus    []TaskStatus
+	mapStartTime    []time.Time
+	reduceStartTime []time.Time
 }
 
 // Imma level with you chief that is giving big chatgpt vibes and in the way where the code fucking sucks and makes me want to commit murder
 type TaskLogEntry struct {
-	Phase    TaskPhase  `json:"phase"`
-	TaskID   int        `json:"task_id"`
-	FileName string     `json:"file_name,omitempty"`
-	Status   TaskStatus `json:"status"` // "idle", "in_progress", "completed"
-	// Timestamp time.Time  `json:"timestamp"`
+	Phase     TaskPhase  `json:"phase"`
+	TaskID    int        `json:"task_id"`
+	FileName  ch.Chunk   `json:"file_name"`
+	Status    TaskStatus `json:"status"` // "idle", "in_progress", "completed"
+	Timestamp time.Time  `json:"timestamp"`
 }
 
 func logTask(entry TaskLogEntry) {
@@ -162,14 +165,15 @@ func logTask(entry TaskLogEntry) {
 }
 
 func MakeMaster(files []string, nReduce int) *MasterTask {
+	chunks := ch.ChunkFiles(files)
 	m := &MasterTask{
-		files:        files,
-		nReduce:      nReduce,
-		phase:        MapPhase,
-		mapStatus:    make([]TaskStatus, len(files)),
-		reduceStatus: make([]TaskStatus, nReduce),
-		// mapStartTime:    make([]time.Time, len(files)),
-		// reduceStartTime: make([]time.Time, nReduce),
+		files:           chunks,
+		nReduce:         nReduce,
+		phase:           MapPhase,
+		mapStatus:       make([]TaskStatus, len(chunks)),
+		reduceStatus:    make([]TaskStatus, nReduce),
+		mapStartTime:    make([]time.Time, len(chunks)),
+		reduceStartTime: make([]time.Time, nReduce),
 	}
 	m.ApplyTaskLogs("task_log.jsonl")
 	return m
@@ -192,14 +196,14 @@ func (m *MasterTask) ApplyTaskLogs(filename string) {
 		}
 		if le.Phase == MapPhase {
 			m.mapStatus[le.TaskID] = le.Status
-			// if le.Status == InProgress {
-			// 	m.mapStartTime[le.TaskID] = le.Timestamp
-			// }
+			if le.Status == InProgress {
+				m.mapStartTime[le.TaskID] = le.Timestamp
+			}
 		} else if le.Phase == ReducePhase {
 			m.reduceStatus[le.TaskID] = le.Status
-			// if le.Status == InProgress {
-			// 	m.reduceStartTime[le.TaskID] = le.Timestamp
-			// }
+			if le.Status == InProgress {
+				m.reduceStartTime[le.TaskID] = le.Timestamp
+			}
 		}
 		m.phase = le.Phase
 	}
@@ -215,31 +219,26 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 
 	if m.phase == MapPhase {
 		for i, status := range m.mapStatus {
-			if status == Idle {
+			if status == Idle || (status == InProgress && time.Now().After(m.mapStartTime[i].Add(TASK_TIMEOUT))) {
 				m.mapStatus[i] = InProgress
+				m.mapStartTime[i] = time.Now()
 
-				if i < len(m.files) {
-					*reply = GetTaskReply{
-						TaskType:  MapPhase,
-						FileName:  m.files[i],
-						MapTaskID: i,
-						NReduce:   m.nReduce,
-						NMap:      len(m.files),
-					}
-					logTask(TaskLogEntry{
-						Phase:    MapPhase,
-						TaskID:   i,
-						FileName: m.files[i],
-						Status:   InProgress,
-					})
-					fmt.Printf("Assigning map task %d with file %s\n", i, m.files[i])
-					return nil
-				} else {
-					fmt.Printf("Warning: Attempted to access file index %d, but only have %d files\n",
-						i, len(m.files))
-					m.mapStatus[i] = Idle // Reset status since we can't process it
-					continue
+				*reply = GetTaskReply{
+					TaskType:  MapPhase,
+					FileName:  m.files[i],
+					MapTaskID: i,
+					NReduce:   m.nReduce,
+					NMap:      len(m.files),
 				}
+				logTask(TaskLogEntry{
+					Phase:     MapPhase,
+					TaskID:    i,
+					FileName:  m.files[i],
+					Status:    InProgress,
+					Timestamp: m.mapStartTime[i],
+				})
+				fmt.Printf("Assigning map task %d with file %s\n", i, m.files[i])
+				return nil
 			}
 
 		}
@@ -255,18 +254,21 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 		}
 	} else if m.phase == ReducePhase {
 		for i, status := range m.reduceStatus {
-			if status == Idle {
+			if status == Idle || (status == InProgress && time.Now().After(m.reduceStartTime[i].Add(TASK_TIMEOUT))) {
 				m.reduceStatus[i] = InProgress
+				m.reduceStartTime[i] = time.Now()
 
 				*reply = GetTaskReply{
 					TaskType:     ReducePhase,
 					ReduceTaskID: i,
+					NMap:         len(m.files),
 					NReduce:      m.nReduce,
 				}
 				logTask(TaskLogEntry{
-					Phase:  ReducePhase,
-					TaskID: i,
-					Status: InProgress,
+					Phase:     ReducePhase,
+					TaskID:    i,
+					Status:    InProgress,
+					Timestamp: m.reduceStartTime[i],
 				})
 				fmt.Printf("Assigning reduce task %d\n", i)
 				return nil
@@ -278,7 +280,8 @@ func (m *MasterTask) GetTask(args GetTaskArgs, reply *GetTaskReply) error {
 			TaskType: DonePhase,
 		}
 		logTask(TaskLogEntry{
-			Phase: DonePhase,
+			Phase:     DonePhase,
+			Timestamp: time.Now(),
 		})
 		return nil
 	}
@@ -298,10 +301,11 @@ func (m *MasterTask) ReportTaskDone(args ReportTaskArgs) error {
 		m.mapStatus[args.TaskID] = Completed
 
 		logTask(TaskLogEntry{
-			Phase:    m.phase,
-			TaskID:   args.TaskID,
-			FileName: m.files[args.TaskID],
-			Status:   m.mapStatus[args.TaskID],
+			Phase:     m.phase,
+			TaskID:    args.TaskID,
+			FileName:  m.files[args.TaskID],
+			Status:    m.mapStatus[args.TaskID],
+			Timestamp: time.Now(),
 		})
 
 		all := true
@@ -322,9 +326,10 @@ func (m *MasterTask) ReportTaskDone(args ReportTaskArgs) error {
 		m.reduceStatus[args.TaskID] = Completed
 
 		logTask(TaskLogEntry{
-			Phase:  m.phase,
-			TaskID: args.TaskID,
-			Status: m.reduceStatus[args.TaskID],
+			Phase:     m.phase,
+			TaskID:    args.TaskID,
+			Status:    m.reduceStatus[args.TaskID],
+			Timestamp: time.Now(),
 		})
 
 		all := true
