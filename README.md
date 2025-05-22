@@ -4,7 +4,9 @@ Aayush, Ben, Gabe, Tymon
 
 ## Demo
 
-<!-- https://github.com/user-attachments/assets/f519998e-15e7-4121-afec-2f92a27ef8bc -->
+https://cpslo-my.sharepoint.com/:v:/g/personal/bhinchli_calpoly_edu/EREX3of0xSpImkGFy-78_jgBPrVhlk0mcoDbcScwFD2FKg?e=DBqMoS&nav=eyJyZWZlcnJhbEluZm8iOnsicmVmZXJyYWxBcHAiOiJTdHJlYW1XZWJBcHAiLCJyZWZlcnJhbFZpZXciOiJTaGFyZURpYWxvZy1MaW5rIiwicmVmZXJyYWxBcHBQbGF0Zm9ybSI6IldlYiIsInJlZmVycmFsTW9kZSI6InZpZXcifX0%3D
+
+Note: demo shows some extra logs from timeouts being triggered that weren't removed at the time of the demo.
 
 ## How to Run
 
