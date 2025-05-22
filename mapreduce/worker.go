@@ -53,7 +53,7 @@ func readChunk(filename string, start, end int64) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			if b == '\n' {
+			if b == ' ' {
 				break
 			}
 		}
@@ -64,11 +64,11 @@ func readChunk(filename string, start, end int64) (string, error) {
 	var currentOffset = startOffset
 
 	for {
-		line, err := reader.ReadBytes('\n')
+		line, err := reader.ReadBytes(' ')
 		if len(line) > 0 {
 			buf.Write(line)
 			currentOffset += int64(len(line))
-			if currentOffset >= end {
+			if currentOffset > end {
 				break
 			}
 		}
@@ -97,6 +97,13 @@ func ExecuteMTask(fileName ch.Chunk, mapTaskID int, nReduce int, mapf func(strin
 	if err != nil {
 		return fmt.Errorf("cannot read file: %v", err)
 	}
+
+	// dump chunk to file (for debugging)
+	// file, err := os.Open(fileName.Filename)
+	// if err != nil {
+	// 	return "", err
+	// }
+	// defer file.Close()
 
 	// Apply the map function
 	kva := mapf(fileName.Filename, string(content))
