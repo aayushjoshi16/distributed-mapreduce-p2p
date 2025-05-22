@@ -7,10 +7,10 @@ package wc
 //
 
 import (
-	"unicode"
+	"strconv"
 	"strings"
- 	"strconv"
- 	// mr "lab4/mapreduce"
+	"unicode"
+	// mr "lab4/mapreduce"
 )
 
 type KeyValue = struct {
