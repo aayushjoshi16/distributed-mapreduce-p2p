@@ -128,7 +128,7 @@ func main() {
 
 	state := NewState(id, self_node, server)
 
-	time.AfterFunc(time.Millisecond*POLL_INTERVAL, func() { state.handlePoll(server)})
+	time.AfterFunc(time.Millisecond*POLL_INTERVAL, func() { state.handlePoll(server) })
 
 	var wg = sync.WaitGroup{}
 	wg.Add(1)
@@ -234,7 +234,7 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 
 	// Skip election timeouts
 	s.raft.PauseElections()
-    defer s.raft.ResumeElections()
+	defer s.raft.ResumeElections()
 
 	masterId := s.raft.GetLeader()
 	if masterId == nil {
@@ -250,7 +250,15 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 
 		// Using Call instead of Go to avoid the nil pointer issue
 		shared.SendMessage(server, *masterId, args)
-		reply := <-s.taskChan
+		var reply mapreduce.GetTaskReply
+		select {
+		case r := <-s.taskChan:
+			reply = r
+		case <-time.After(5 * time.Second):
+			fmt.Printf("Node %d: No task response from master.", s.id)
+			s.isActive = false
+			break
+		}
 
 		if !reply.NoTasks {
 			switch reply.TaskType {
