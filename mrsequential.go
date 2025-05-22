@@ -6,12 +6,12 @@ package main
 
 import (
 	"fmt"
-	"plugin"
-	"os"
-	"log"
 	"io"
-	"sort"
 	"lab4/wc"
+	"log"
+	"os"
+	"plugin"
+	"sort"
 )
 
 // for sorting by key.
@@ -22,10 +22,21 @@ func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
+var dataFiles = []string{
+	"data/19626.txt",
+	"data/pg-being_ernest.txt",
+	"data/pg-metamorphosis.txt",
+	"data/pg84.txt",
+	"data/pg1342.txt",
+	"data/pg1513.txt",
+	"data/pg2701.txt",
+	"data/pg16389.txt",
+}
+
 // Mapper function
 // TODO: Modify function to distribute mapping work to nodes based on data chunks
+// WHERE IS THIS USED WHAT THE ACTUAL FUCK
 func Mapper() {
-	dataFiles := []string{"./data/pg-being_ernest.txt", "./data/pg-metamorphosis.txt"}
 
 	intermediate := []wc.KeyValue{}
 	// read each input file,
@@ -80,7 +91,7 @@ func main() {
 	// accumulate the intermediate Map output.
 	//
 	intermediate := []wc.KeyValue{}
-	for _, filename := range os.Args[1:] {
+	for _, filename := range dataFiles {
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
@@ -102,7 +113,7 @@ func main() {
 
 	sort.Sort(ByKey(intermediate))
 
-	oname := "mr-out-0"
+	oname := "seq-mr-out-0"
 	ofile, _ := os.Create(oname)
 
 	//

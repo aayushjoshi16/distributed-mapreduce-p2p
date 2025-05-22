@@ -3,10 +3,14 @@ package main
 import (
 	"encoding/gob"
 	"fmt"
+	"math/rand"
+
 	// "lab4/mapreduce"
 	"lab4/gossip"
+	"lab4/mapreduce"
 	"lab4/raft"
 	"lab4/shared"
+	"lab4/wc"
 	"net/rpc"
 	"os"
 	"strconv"
@@ -21,7 +25,16 @@ const (
 	Z_TIME_MIN    = 30
 )
 
-var FILES = [...]string{"data/pg-being_ernest.txt", "data/pg-metamorphosis.txt"}
+var FILES = [...]string{
+	"data/19626.txt",
+	"data/pg-being_ernest.txt",
+	"data/pg-metamorphosis.txt",
+	"data/pg84.txt",
+	"data/pg1342.txt",
+	"data/pg1513.txt",
+	"data/pg2701.txt",
+	"data/pg16389.txt",
+}
 
 func detectFailures(membership *gossip.Membership) {
 	currTime := time.Now()
@@ -48,7 +61,11 @@ func detectFailures(membership *gossip.Membership) {
 type ClientState struct {
 	id         int
 	membership gossip.Membership
-	raft       raft.RaftState
+	raft       *raft.RaftState
+	isActive   bool
+	isDone     bool
+	taskChan   chan mapreduce.GetTaskReply
+	tracker    *mapreduce.MasterTask
 }
 
 func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
@@ -60,6 +77,10 @@ func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
 		id:         id,
 		membership: membership,
 		raft:       raft,
+		isActive:   false,
+		isDone:     false,
+		taskChan:   make(chan mapreduce.GetTaskReply, 1),
+		tracker:    nil,
 	}
 }
 
@@ -69,6 +90,12 @@ func main() {
 	gob.Register(shared.RequestVote{})
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
+
+	gob.Register(mapreduce.GetTaskArgs{})
+	gob.Register(mapreduce.GetTaskReply{})
+	gob.Register(mapreduce.ReportTaskArgs{})
+	gob.Register(mapreduce.KeyValue{})
+	gob.Register(mapreduce.MasterTask{})
 
 	// Connect to RPC server
 	server, _ := rpc.DialHTTP("tcp", "localhost:9005")
@@ -133,6 +160,35 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 		case shared.LeaderHeartbeat:
 			// raft_timer.Reset(RAFT_X_TIME*time.Second + shared.RandomLeadTimeout())
 			s.raft.HandleLeaderHeartbeat(server, smsg, s.id)
+			// we have a leader GO GO GO
+			if !s.isActive && !s.isDone {
+				// technically there is a race condition here. I really hope it doesn't matter.
+				s.isActive = true
+				go s.runMapReduceWorker(server)
+			}
+		case mapreduce.GetTaskArgs:
+			// should only recieve this if leader
+			if s.raft.Role == raft.RoleLeader {
+				if s.tracker == nil {
+					s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+				}
+				reply := mapreduce.GetTaskReply{}
+				if err := s.tracker.GetTask(smsg, &reply); err != nil {
+					reply.NoTasks = true
+				} else {
+					reply.NoTasks = false
+				}
+				shared.SendMessage(server, smsg.SenderId, reply)
+			}
+		case mapreduce.ReportTaskArgs:
+			if s.raft.Role == raft.RoleLeader {
+				if s.tracker == nil {
+					s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+				}
+				s.tracker.ReportTaskDone(smsg)
+			}
+		case mapreduce.GetTaskReply:
+			s.taskChan <- smsg
 		}
 	}
 
@@ -151,4 +207,122 @@ func printMembership(m gossip.Membership) {
 		}
 	}
 	fmt.Println("")
+}
+
+func (s *ClientState) reportTaskComplete(server *rpc.Client, taskType mapreduce.TaskPhase, taskID int) {
+	if server == nil {
+		fmt.Printf("Node %d: Error - RPC client is nil\n", s.id)
+		return
+	}
+
+	masterId := s.raft.GetLeader()
+
+	args := mapreduce.ReportTaskArgs{
+		TaskType: taskType,
+		TaskID:   taskID,
+	}
+	// error handling smirror handling
+	// reply := mapreduce.ReportTaskReply{}
+
+	shared.SendMessage(server, *masterId, args)
+
+	fmt.Printf("Node %d: Successfully reported completion of task %d\n", s.id, taskID)
+
+}
+
+func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
+	fmt.Printf("Node %d: Starting MapReduce worker\n", s.id)
+
+	// Skip election timeouts
+	s.raft.PauseElections()
+	defer s.raft.ResumeElections()
+
+	masterId := s.raft.GetLeader()
+	if masterId == nil {
+		s.isActive = false
+		return
+	}
+	fmt.Printf("Node %d: Worker found leader %d\n", s.id, *masterId)
+
+	for !s.isDone {
+		args := mapreduce.GetTaskArgs{
+			SenderId: s.id,
+		}
+
+		// Using Call instead of Go to avoid the nil pointer issue
+		shared.SendMessage(server, *masterId, args)
+		var reply mapreduce.GetTaskReply
+		select {
+		case r := <-s.taskChan:
+			reply = r
+		case <-time.After(5 * time.Second):
+			fmt.Printf("Node %d: No task response from master.", s.id)
+			s.isActive = false
+			break
+		}
+
+		// just like me the node sometimes contemplates suicide
+		if rand.Int31()%20 == 0 {
+			fmt.Println("Simuating crash.")
+			os.Exit(1)
+		}
+
+		if !reply.NoTasks {
+			switch reply.TaskType {
+			case mapreduce.MapPhase:
+				fmt.Printf("Node %d: Running Map Task %d on file %s\n", s.id, reply.MapTaskID, reply.FileName)
+
+				// Verify file exists
+				if _, err := os.Stat(reply.FileName.Filename); os.IsNotExist(err) {
+					fmt.Printf("Node %d: File does not exist: %s\n", s.id, reply.FileName)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				err := mapreduce.ExecuteMTask(reply.FileName, reply.MapTaskID, reply.NReduce, wc.Map)
+				if err != nil {
+					fmt.Printf("Node %d: Error executing map task %d: %v\n", s.id, reply.MapTaskID, err)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				fmt.Printf("Node %d: Completed Map Task %d\n", s.id, reply.MapTaskID)
+				s.reportTaskComplete(server, mapreduce.MapPhase, reply.MapTaskID)
+
+			case mapreduce.ReducePhase:
+				fmt.Printf("Node %d: Running Reduce Task %d\n", s.id, reply.ReduceTaskID)
+
+				// Use the correct NMap value
+				nMap := reply.NMap
+				if nMap == 0 {
+					fmt.Printf("Node %d: Warning - NMap is 0\n", s.id)
+					continue
+				}
+
+				err := mapreduce.ExecuteRTask(reply.ReduceTaskID, nMap, wc.Reduce)
+				if err != nil {
+					fmt.Printf("Node %d: Error executing reduce task %d: %v\n", s.id, reply.ReduceTaskID, err)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				fmt.Printf("Node %d: Completed Reduce Task %d\n", s.id, reply.ReduceTaskID)
+				s.reportTaskComplete(server, mapreduce.ReducePhase, reply.ReduceTaskID)
+
+			case mapreduce.DonePhase:
+				fmt.Printf("Node %d: All tasks are done\n", s.id)
+				s.isDone = true
+				s.isActive = false
+				fmt.Printf("Node %d: Exiting MapReduce worker\n", s.id)
+				return
+
+			default:
+				fmt.Printf("Node %d: Unknown task type %d\n", s.id, reply.TaskType)
+				// time.Sleep(1 * time.Second)
+			}
+		}
+
+		// Small delay between task requests
+		time.Sleep(100 * time.Millisecond)
+	}
 }

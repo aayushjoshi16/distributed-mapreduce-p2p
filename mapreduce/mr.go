@@ -66,35 +66,6 @@ func SplitFile(filename string) ([]string, error) {
 	return chunks, nil
 }
 
-func GetTask(args *MasterTask, reply *KeyValue) error {
-	args.mutex.Lock()
-	defer args.mutex.Unlock()
-
-	if args.phase == DonePhase {
-		return nil
-	}
-
-	for i := 0; i < len(args.mapTasks); i++ {
-		if args.mapTasks[i] == Idle {
-			args.mapTasks[i] = InProgress
-			reply.Key = args.files[i]
-			reply.Value = fmt.Sprintf("%d", i)
-			return nil
-		}
-	}
-
-	for i := 0; i < len(args.reduceTasks); i++ {
-		if args.reduceTasks[i] == Idle {
-			args.reduceTasks[i] = InProgress
-			reply.Key = fmt.Sprintf("reduce-%d", i)
-			reply.Value = ""
-			return nil
-		}
-	}
-
-	return nil
-}
-
 // Structure for replication
 // Replicaiton betwen leader and atleast one follower
 /*
