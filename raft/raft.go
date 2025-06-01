@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"lab4/shared"
+	"lab4/mapreduce"
 	"math/rand"
 	"net/rpc"
 	"time"
@@ -22,20 +23,23 @@ const (
 	RAFT_Z_TIME = 250
 )
 
-type RequestVote struct {
-	Term        int
-	CandidateId int
-}
+// type RequestVote struct {
+// 	Timestamp   time.Time
+// 	Term        int
+// 	CandidateId int
+// }
 
-type RequestVoteResp struct {
-	Term int
-	Vote bool
-}
+// type RequestVoteResp struct {
+// 	Timestamp   time.Time
+// 	Term int
+// 	Vote bool
+// }
 
-type LeaderHeartbeat struct {
-	Term     int
-	LeaderId int
-}
+// type LeaderHeartbeat struct {
+// 	Timestamp   time.Time
+// 	Term     int
+// 	LeaderId int
+// }
 
 type RaftState struct {
 	Role           Role
@@ -79,7 +83,12 @@ func (s *RaftState) ResumeElections() {
 // RequestVotes for candidate calling on them
 func (s *RaftState) ShouldRequestVote(server *rpc.Client, args shared.RequestVote, id int) bool {
 	fmt.Printf("Node %d: Received vote request from %d with term %d\n", id, args.CandidateId, args.Term)
-	// fmt.Printf("Recieved vote request from %d with term %d, current %d, votedFor %s\n", args.CandidateId, args.Term, currentTerm, votedFor)
+	
+	// Check if the request is stale
+	if time.Since(args.Timestamp).Seconds() > 2.0 {
+		return false
+	}
+	
 	// Check if the term is valid
 	if args.Term < s.term {
 		return false
@@ -114,11 +123,13 @@ func (s *RaftState) RequestVote(server *rpc.Client, args shared.RequestVote, id 
 		shared.SendMessage(server, args.CandidateId, shared.RequestVoteResp{
 			Term: s.term,
 			Vote: true,
+			Timestamp: time.Now(),
 		})
 	} else {
 		shared.SendMessage(server, args.CandidateId, shared.RequestVoteResp{
 			Term: s.term,
 			Vote: false,
+			Timestamp: time.Now(),
 		})
 	}
 }
@@ -190,6 +201,7 @@ func (s *RaftState) StartElection(server *rpc.Client, id int) {
 		voteReq := shared.RequestVote{
 			Term:        s.term,
 			CandidateId: id,
+			Timestamp:   time.Now(),
 		}
 		shared.AsyncSendMessage(server, i, voteReq)
 	}
@@ -200,6 +212,11 @@ func (s *RaftState) StartElection(server *rpc.Client, id int) {
 
 // Handle vote responses
 func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
+	// Check if request is stale
+	if time.Since(resp.Timestamp).Seconds() > 2.0 {
+		return
+	}
+
 	// If received a higher term, revert to follower
 	if resp.Term > s.term {
 		s.term = resp.Term
@@ -208,8 +225,6 @@ func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
 		s.num_votes = 0 // Reset votes
 		return
 	}
-
-	// fmt.Printf("Node %d: Received vote response for term %d role %s and vote %s\n", self_node.ID, resp.Term, role, resp.Vote)
 
 	// Only count votes if still a candidate
 	if s.Role == RoleCandidate && s.term == resp.Term && resp.Vote {
@@ -249,6 +264,7 @@ func (s *RaftState) SendHeartbeats(server *rpc.Client, id int) {
 		heartbeat := shared.LeaderHeartbeat{
 			Term:     s.term,
 			LeaderId: id,
+			Timestamp: time.Now(),
 		}
 		shared.SendMessage(server, i, heartbeat)
 	}
@@ -256,6 +272,11 @@ func (s *RaftState) SendHeartbeats(server *rpc.Client, id int) {
 
 // Handle leader heartbeats
 func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.LeaderHeartbeat, id int) {
+	// Check if request is stale
+	if time.Since(heartbeat.Timestamp).Seconds() > 2.0 {
+		return
+	}
+
 	// If term is outdated, ignore
 	if heartbeat.Term < s.term {
 		return
@@ -265,6 +286,15 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 	if heartbeat.Term >= s.term {
 		// Update term if needed
 		if heartbeat.Term > s.term {
+			// Send message to the new leader for pending data replication
+			fmt.Printf("Node %d: Sending data replication request to leader %d for term %d\n", id, heartbeat.LeaderId, heartbeat.Term)
+			dataReplication := mapreduce.DataReplication{
+				SenderId:   id,
+				Term: 		s.term,
+			}
+			shared.SendMessage(server, heartbeat.LeaderId, dataReplication)
+
+			// Update state
 			s.term = heartbeat.Term
 			s.cur_vote = nil
 		}
@@ -277,9 +307,6 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 
 		// Reset election timer
 		s.ResetElectionTimer(server, id)
-
-		// fmt.Printf("Node %d: Received heartbeat from leader %d (term %d)\n",
-		// 	id, heartbeat.LeaderId, heartbeat.Term)
 	}
 }
 

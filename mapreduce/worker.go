@@ -15,6 +15,11 @@ import (
 	"strings"
 )
 
+type DataReplication struct {
+	SenderId int
+	Term     int
+}
+
 // for sorting by key.
 type ByKey []wc.KeyValue
 

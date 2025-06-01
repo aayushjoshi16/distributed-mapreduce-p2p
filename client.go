@@ -90,7 +90,8 @@ func main() {
 	gob.Register(shared.RequestVote{})
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
-
+	
+	gob.Register(mapreduce.DataReplication{})
 	gob.Register(mapreduce.GetTaskArgs{})
 	gob.Register(mapreduce.GetTaskReply{})
 	gob.Register(mapreduce.ReportTaskArgs{})
@@ -160,26 +161,34 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 		case shared.LeaderHeartbeat:
 			// raft_timer.Reset(RAFT_X_TIME*time.Second + shared.RandomLeadTimeout())
 			s.raft.HandleLeaderHeartbeat(server, smsg, s.id)
+			
 			// we have a leader GO GO GO
-			if !s.isActive && !s.isDone {
-				// technically there is a race condition here. I really hope it doesn't matter.
-				s.isActive = true
-				go s.runMapReduceWorker(server)
-			}
+			// if !s.isActive && !s.isDone {
+			// 	// technically there is a race condition here. I really hope it doesn't matter.
+			// 	s.isActive = true
+			// 	go s.runMapReduceWorker(server)
+			// }
+
+		case mapreduce.DataReplication:
+			fmt.Printf("Outdated term request from from %d with term %d\n", smsg.SenderId, smsg.Term)
+
 		case mapreduce.GetTaskArgs:
 			// should only recieve this if leader
 			if s.raft.Role == raft.RoleLeader {
-				if s.tracker == nil {
-					s.tracker = mapreduce.MakeMaster(FILES[:], 8)
-				}
-				reply := mapreduce.GetTaskReply{}
-				if err := s.tracker.GetTask(smsg, &reply); err != nil {
-					reply.NoTasks = true
-				} else {
-					reply.NoTasks = false
-				}
-				shared.SendMessage(server, smsg.SenderId, reply)
+				fmt.Printf("Ready to begin!\n")
+
+				// if s.tracker == nil {
+				// 	s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+				// }
+				// reply := mapreduce.GetTaskReply{}
+				// if err := s.tracker.GetTask(smsg, &reply); err != nil {
+				// 	reply.NoTasks = true
+				// } else {
+				// 	reply.NoTasks = false
+				// }
+				// shared.SendMessage(server, smsg.SenderId, reply)
 			}
+
 		case mapreduce.ReportTaskArgs:
 			if s.raft.Role == raft.RoleLeader {
 				if s.tracker == nil {
@@ -189,6 +198,8 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			}
 		case mapreduce.GetTaskReply:
 			s.taskChan <- smsg
+		default:
+			fmt.Printf("Unknown message type %T\n", msg)
 		}
 	}
 

@@ -36,6 +36,7 @@ func main() {
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
 
+	gob.Register(mapreduce.DataReplication{})
 	gob.Register(mapreduce.GetTaskArgs{})
 	gob.Register(mapreduce.GetTaskReply{})
 	gob.Register(mapreduce.ReportTaskArgs{})

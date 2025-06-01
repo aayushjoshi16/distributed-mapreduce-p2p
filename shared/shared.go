@@ -18,16 +18,19 @@ type GossipHeartbeat struct {
 }
 
 type RequestVote struct {
+	Timestamp   time.Time
 	Term        int
 	CandidateId int
 }
 
 type RequestVoteResp struct {
+	Timestamp   time.Time
 	Term int
 	Vote bool
 }
 
 type LeaderHeartbeat struct {
+	Timestamp   time.Time
 	Term     int
 	LeaderId int
 }
