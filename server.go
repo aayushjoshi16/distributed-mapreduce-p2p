@@ -38,6 +38,7 @@ func main() {
 
 	gob.Register(replication.DataReplicationRequest{})
 	gob.Register(replication.DataReplicationResponse{})
+	gob.Register(replication.DataReplicationTask{})
 
 	gob.Register(mapreduce.GetTaskArgs{})
 	gob.Register(mapreduce.GetTaskReply{})

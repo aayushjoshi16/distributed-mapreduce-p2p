@@ -100,6 +100,7 @@ func main() {
 	gob.Register(replication.DataReplicationState{})
 	gob.Register(replication.DataReplicationRequest{})
 	gob.Register(replication.DataReplicationResponse{})
+	gob.Register(replication.DataReplicationTask{})
 	
 	gob.Register(mapreduce.DataReplication{})
 	gob.Register(mapreduce.GetTaskArgs{})
@@ -192,9 +193,13 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 
 		case replication.DataReplicationRequest:
 			fmt.Printf("Outdated term request from from %d with term %d\n", smsg.SenderId, smsg.Term)
+			s.replication.AssignData(server, smsg)
 
 		case replication.DataReplicationResponse:
 			s.replication.ReceiveData(smsg)
+
+		case replication.DataReplicationTask:
+			s.replication.SendData(server, smsg)
 
 		case mapreduce.GetTaskArgs:
 			// should only recieve this if leader
