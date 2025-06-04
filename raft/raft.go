@@ -3,7 +3,7 @@ package raft
 import (
 	"fmt"
 	"lab4/shared"
-	"lab4/mapreduce"
+	"lab4/replication"
 	"math/rand"
 	"net/rpc"
 	"time"
@@ -46,7 +46,7 @@ type RaftState struct {
 	election_timer *time.Timer
 	election_mutex sync.RWMutex
 	election_limit int
-	term           int
+	Term           int
 	cur_vote       *int
 	num_votes      int
 	leader         *int
@@ -57,7 +57,7 @@ func NewRaftState(server *rpc.Client, id int) *RaftState {
 		Role:           RoleFollower,
 		election_timer: nil,
 		election_limit: 5,
-		term:           0,
+		Term:           0,
 		cur_vote:       nil,
 		num_votes:      0,
 		leader:         nil,
@@ -82,21 +82,21 @@ func (s *RaftState) ResumeElections() {
 
 // RequestVotes for candidate calling on them
 func (s *RaftState) ShouldRequestVote(server *rpc.Client, args shared.RequestVote, id int) bool {
-	fmt.Printf("Node %d: Received vote request from %d with term %d\n", id, args.CandidateId, args.Term)
+	fmt.Printf("Node %d: Received vote request from %d with Term %d\n", id, args.CandidateId, args.Term)
 	
 	// Check if the request is stale
 	if time.Since(args.Timestamp).Seconds() > 2.0 {
 		return false
 	}
 	
-	// Check if the term is valid
-	if args.Term < s.term {
+	// Check if the Term is valid
+	if args.Term < s.Term {
 		return false
 	}
 
-	// If new term, update current term and revert to follower
-	if args.Term > s.term {
-		s.term = args.Term
+	// If new Term, update current Term and revert to follower
+	if args.Term > s.Term {
+		s.Term = args.Term
 		s.Role = RoleFollower
 		s.cur_vote = nil
 	}
@@ -106,13 +106,13 @@ func (s *RaftState) ShouldRequestVote(server *rpc.Client, args shared.RequestVot
 		return false
 	}
 
-	// If already voted this term
+	// If already voted this Term
 	if s.cur_vote != nil && *s.cur_vote != args.CandidateId {
 		return false
 	}
 
-	// Grant vote if haven't voted in this term or already voted for this candidate
-	fmt.Printf("Node %d: Granted vote to %d for term %d\n", id, args.CandidateId, s.term)
+	// Grant vote if haven't voted in this Term or already voted for this candidate
+	fmt.Printf("Node %d: Granted vote to %d for Term %d\n", id, args.CandidateId, s.Term)
 	return true
 }
 
@@ -121,13 +121,13 @@ func (s *RaftState) RequestVote(server *rpc.Client, args shared.RequestVote, id 
 		s.cur_vote = &args.CandidateId
 		s.ResetElectionTimer(server, id)
 		shared.SendMessage(server, args.CandidateId, shared.RequestVoteResp{
-			Term: s.term,
+			Term: s.Term,
 			Vote: true,
 			Timestamp: time.Now(),
 		})
 	} else {
 		shared.SendMessage(server, args.CandidateId, shared.RequestVoteResp{
-			Term: s.term,
+			Term: s.Term,
 			Vote: false,
 			Timestamp: time.Now(),
 		})
@@ -183,13 +183,13 @@ func (s *RaftState) StartElection(server *rpc.Client, id int) {
 		return
 	}
 
-	// Increment term and vote for self
-	s.term++
+	// Increment Term and vote for self
+	s.Term++
 	s.cur_vote = &id
 	s.Role = RoleCandidate
 	s.num_votes = 1 // Vote for self
 
-	fmt.Printf("Node %d: Starting election for term %d\n", id, s.term)
+	fmt.Printf("Node %d: Starting election for Term %d\n", id, s.Term)
 
 	// Request votes from all nodes
 	for i := 1; i <= shared.MAX_NODES; i++ {
@@ -199,7 +199,7 @@ func (s *RaftState) StartElection(server *rpc.Client, id int) {
 
 		// Send RequestVote to each node
 		voteReq := shared.RequestVote{
-			Term:        s.term,
+			Term:        s.Term,
 			CandidateId: id,
 			Timestamp:   time.Now(),
 		}
@@ -217,9 +217,9 @@ func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
 		return
 	}
 
-	// If received a higher term, revert to follower
-	if resp.Term > s.term {
-		s.term = resp.Term
+	// If received a higher Term, revert to follower
+	if resp.Term > s.Term {
+		s.Term = resp.Term
 		s.Role = RoleFollower
 		s.cur_vote = nil
 		s.num_votes = 0 // Reset votes
@@ -227,7 +227,7 @@ func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
 	}
 
 	// Only count votes if still a candidate
-	if s.Role == RoleCandidate && s.term == resp.Term && resp.Vote {
+	if s.Role == RoleCandidate && s.Term == resp.Term && resp.Vote {
 		s.num_votes++
 
 		fmt.Printf("Node %d: Total votes: %d\n", id, s.num_votes)
@@ -240,7 +240,7 @@ func (s *RaftState) VoteResponse(resp shared.RequestVoteResp, id int) {
 			}
 
 			s.Role = RoleLeader
-			fmt.Printf("Node %d: Became leader for term %d\n", id, s.term)
+			fmt.Printf("Node %d: Became leader for Term %d\n", id, s.Term)
 
 			// Stop election timer as leaders don't timeout
 			if s.election_timer != nil {
@@ -262,7 +262,7 @@ func (s *RaftState) SendHeartbeats(server *rpc.Client, id int) {
 		}
 
 		heartbeat := shared.LeaderHeartbeat{
-			Term:     s.term,
+			Term:     s.Term,
 			LeaderId: id,
 			Timestamp: time.Now(),
 		}
@@ -277,25 +277,27 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 		return
 	}
 
-	// If term is outdated, ignore
-	if heartbeat.Term < s.term {
+	// If Term is outdated, ignore
+	if heartbeat.Term < s.Term {
 		return
 	}
 
-	// If new term or valid heartbeat from current term
-	if heartbeat.Term >= s.term {
-		// Update term if needed
-		if heartbeat.Term > s.term {
+	// If new Term or valid heartbeat from current Term
+	if heartbeat.Term >= s.Term {
+		// Update Term if needed
+		if heartbeat.Term > s.Term {
 			// Send message to the new leader for pending data replication
-			fmt.Printf("Node %d: Sending data replication request to leader %d for term %d\n", id, heartbeat.LeaderId, heartbeat.Term)
-			dataReplication := mapreduce.DataReplication{
+			fmt.Printf("Node %d: Sending data replication request to leader %d for Term %d\n", id, heartbeat.LeaderId, heartbeat.Term)
+			dataReplication := replication.DataReplicationRequest{
+				Timestamp: 	time.Now(),
 				SenderId:   id,
-				Term: 		s.term,
+				Term: 		s.Term,
+				LastDataId: 0,
 			}
 			shared.SendMessage(server, heartbeat.LeaderId, dataReplication)
 
 			// Update state
-			s.term = heartbeat.Term
+			s.Term = heartbeat.Term
 			s.cur_vote = nil
 		}
 

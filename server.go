@@ -3,10 +3,10 @@ package main
 import (
 	"lab4/gossip"
 	"lab4/mapreduce"
+	"lab4/replication"
 	"lab4/shared"
 	"os"
 
-	// "lab4/mapreduce"
 	"encoding/gob"
 	"fmt"
 	"net/http"
@@ -36,7 +36,9 @@ func main() {
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
 
-	gob.Register(mapreduce.DataReplication{})
+	gob.Register(replication.DataReplicationRequest{})
+	gob.Register(replication.DataReplicationResponse{})
+
 	gob.Register(mapreduce.GetTaskArgs{})
 	gob.Register(mapreduce.GetTaskReply{})
 	gob.Register(mapreduce.ReportTaskArgs{})

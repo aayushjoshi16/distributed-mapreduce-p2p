@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	// "lab4/mapreduce"
+	"lab4/replication"
 	"lab4/gossip"
 	"lab4/mapreduce"
 	"lab4/raft"
@@ -66,6 +66,7 @@ type ClientState struct {
 	isDone     bool
 	taskChan   chan mapreduce.GetTaskReply
 	tracker    *mapreduce.MasterTask
+	replication *replication.DataReplicationState
 }
 
 func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
@@ -81,6 +82,11 @@ func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
 		isDone:     false,
 		taskChan:   make(chan mapreduce.GetTaskReply, 1),
 		tracker:    nil,
+		replication: &replication.DataReplicationState{
+			NodeId:    id,
+			DataId:    0,
+			Broadcast: false,
+		},
 	}
 }
 
@@ -90,6 +96,10 @@ func main() {
 	gob.Register(shared.RequestVote{})
 	gob.Register(shared.RequestVoteResp{})
 	gob.Register(shared.LeaderHeartbeat{})
+
+	gob.Register(replication.DataReplicationState{})
+	gob.Register(replication.DataReplicationRequest{})
+	gob.Register(replication.DataReplicationResponse{})
 	
 	gob.Register(mapreduce.DataReplication{})
 	gob.Register(mapreduce.GetTaskArgs{})
@@ -149,6 +159,17 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 
 	detectFailures(&s.membership)
 
+	// If the node is leader, start broadcasting data
+	if s.raft.Role == raft.RoleLeader && !s.replication.Broadcast {
+		s.replication.Broadcast = true
+		go s.replication.BroadcastData(server, replication.DataReplicationRequest{
+			Timestamp:  time.Now(),
+			Term:       s.raft.Term,
+			SenderId:   s.id,
+			LastDataId: 0,
+		})
+	}
+
 	for _, msg := range shared.ReadMessages(server, s.id) {
 		switch smsg := msg.(type) {
 		case shared.GossipHeartbeat:
@@ -169,8 +190,11 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			// 	go s.runMapReduceWorker(server)
 			// }
 
-		case mapreduce.DataReplication:
+		case replication.DataReplicationRequest:
 			fmt.Printf("Outdated term request from from %d with term %d\n", smsg.SenderId, smsg.Term)
+
+		case replication.DataReplicationResponse:
+			s.replication.ReceiveData(smsg)
 
 		case mapreduce.GetTaskArgs:
 			// should only recieve this if leader
