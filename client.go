@@ -166,7 +166,7 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			Timestamp:  time.Now(),
 			Term:       s.raft.Term,
 			SenderId:   s.id,
-			LastDataId: 0,
+			LastDataId: s.replication.DataId,
 		})
 	}
 

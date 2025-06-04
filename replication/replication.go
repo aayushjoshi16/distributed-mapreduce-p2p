@@ -61,9 +61,6 @@ func (d *DataReplicationState) BroadcastData(server *rpc.Client, args DataReplic
 		StartDataId: -1,					// -1 to indicate it's a broadcast
 		EndDataId:   args.LastDataId + 1,	// Broadcasting next (single) data entry
 	}
-	// reply.StartDataId = -1
-	// reply.EndDataId = args.LastDataId + 1
-	// reply.SenderId = d.NodeId
 
 	// Extract data from the file based on the last data ID
 	data, err := ReadDataFile(args.LastDataId + 1, args.LastDataId + 1)
@@ -87,6 +84,13 @@ func (d *DataReplicationState) BroadcastData(server *rpc.Client, args DataReplic
 			shared.SendMessage(server, i, reply)
 		}
 	}
+
+	// Add this data entry to the local DataItems
+	dataEntry := DataItem{
+		Id:    args.LastDataId + 1,
+		Value: data.([]string)[0],
+	}
+	d.insertDataItemSorted(dataEntry)
 
 	// Broadcast next data entry after 5 seconds
 	time.AfterFunc(5*time.Second, func() {
@@ -148,6 +152,7 @@ func (d *DataReplicationState) ReceiveData(args DataReplicationResponse) error {
 			}
 
 			fmt.Printf("Data entry received: ID %d, Value: %s\n", dataEntry.Id, dataEntry.Value)
+			fmt.Printf("%d\n", d.DataId)
 
 			// Insert the entry in sorted order
 			d.insertDataItemSorted(dataEntry)
