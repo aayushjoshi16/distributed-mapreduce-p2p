@@ -149,6 +149,7 @@ func main() {
 	wg.Wait()
 }
 
+
 func (s *ClientState) handlePoll(server *rpc.Client) {
 	var self_node gossip.Node
 	s.membership.Get(s.id, &self_node)
@@ -162,7 +163,7 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 	detectFailures(&s.membership)
 
 	// If the node is leader, start broadcasting data
-	if s.raft.Role == raft.RoleLeader && !s.replication.BroadcastFlag {
+	if s.raft.Role == raft.RoleLeader && !s.replication.BroadcastFlag && s.isDone {
 		s.replication.BroadcastFlag = true
 		go s.replication.BroadcastData(server, replication.DataReplicationRequest{
 			Timestamp:  time.Now(),
