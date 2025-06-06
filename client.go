@@ -162,9 +162,9 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 	detectFailures(&s.membership)
 
 	// If the node is leader, start broadcasting data
-	// UNCOMMEND THIS IF MAPREDUCE SHOULD RUN BEFORE REPLICATION
-	// if s.raft.Role == raft.RoleLeader && !s.replication.BroadcastFlag && s.isDone {
-	if s.raft.Role == raft.RoleLeader && !s.replication.BroadcastFlag {
+	// UNCOMMENT THIS IF MAPREDUCE SHOULD RUN BEFORE REPLICATION
+    // if s.raft.Role == raft.RoleLeader && !s.replication.BroadcastFlag && s.isDone {
+	   if s.raft.Role == raft.RoleLeader && !s.replication.BroadcastFlag {
 		s.replication.BroadcastFlag = true
 		go s.replication.BroadcastData(server, replication.DataReplicationRequest{
 			Timestamp:  time.Now(),
@@ -187,10 +187,10 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			// raft_timer.Reset(RAFT_X_TIME*time.Second + shared.RandomLeadTimeout())
 			s.raft.HandleLeaderHeartbeat(server, smsg, s.id)
 			
-			// UNCOMMEND THIS IF MAPREDUCE SHOULD RUN
-			// // we have a leader GO GO GO
+			// UNCOMMENT THIS IF MAPREDUCE SHOULD RUN
+		    // we have a leader GO GO GO
 			// if !s.isActive && !s.isDone {
-			// 	// technically there is a race condition here. I really hope it doesn't matter.
+			 	// technically there is a race condition here. I really hope it doesn't matter.
 			// 	s.isActive = true
 			// 	go s.runMapReduceWorker(server)
 			// }
@@ -208,7 +208,7 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			s.replication.SendData(server, smsg)
 
 		case mapreduce.GetTaskArgs:
-			// UNCOMMEND THIS IF MAPREDUCE SHOULD RUN
+			// UNCOMMENT THIS IF MAPREDUCE SHOULD RUN
 			// should only recieve this if leader
 			// if s.raft.Role == raft.RoleLeader {
 			// 	if s.tracker == nil {
@@ -306,7 +306,7 @@ func (s *ClientState) runMapReduceWorker(server *rpc.Client) {
 			break
 		}
 
-		// just like me the node sometimes contemplates suicide
+		// LOGIC TO CRASH NODES RANDOMLY TO SIMULATE NODE FAILURE
 		if rand.Int31()%20 == 0 {
 			fmt.Println("Simuating crash.")
 			os.Exit(1)
