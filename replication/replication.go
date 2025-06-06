@@ -404,17 +404,13 @@ func (d *DataReplicationState) CheckAndDump(server *rpc.Client, leaderId int) er
 				missingRanges = append(missingRanges, [2]int{lastFileId + 1, firstMemoryId - 1})
 			}
 		}	
-	} else if !os.IsNotExist(diskErr) {
-		fileName := fmt.Sprintf("%d-replication.json", d.NodeId)
-		fmt.Printf("Node %d: Error reading data from file %s: %v\n", d.NodeId, fileName, diskErr)
-		return diskErr
 	}
 	
 	// Flag to indicate if we requested any data replication
 	dataRequested := false
 
 	// Handle missing ranges if any are found
-	if len(missingRanges) > 0 {
+	if diskErr == nil && len(missingRanges) > 0 {
 		for _, r := range missingRanges {
 			if diskErr == nil {
 				// Simple check - if first and last elements exist to avoid unnecessary requests
