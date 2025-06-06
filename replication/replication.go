@@ -325,7 +325,7 @@ func (d *DataReplicationState) ReceiveData(server *rpc.Client, args DataReplicat
 		}
 		d.PrintDataItems()
 	}
-	
+
 	// Start check and dump process if the flag is not set
 	if !d.CheckAndDumpFlag {
 		d.CheckAndDumpFlag = true
@@ -335,7 +335,7 @@ func (d *DataReplicationState) ReceiveData(server *rpc.Client, args DataReplicat
 	return nil
 }
 
-// Worker: Function that checks for missing data and writes to local disk
+// Function that checks for missing data and writes to local disk
 func (d *DataReplicationState) CheckAndDump(server *rpc.Client, leaderId int) error {
 	// Check in-memory data items to check for missing data
 	fmt.Printf("Node %d: Checking for missing data...\n", d.NodeId)
