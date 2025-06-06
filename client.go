@@ -185,12 +185,12 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			// raft_timer.Reset(RAFT_X_TIME*time.Second + shared.RandomLeadTimeout())
 			s.raft.HandleLeaderHeartbeat(server, smsg, s.id)
 			
-			// // we have a leader GO GO GO
-			// if !s.isActive && !s.isDone {
-			// 	// technically there is a race condition here. I really hope it doesn't matter.
-			// 	s.isActive = true
-			// 	go s.runMapReduceWorker(server)
-			// }
+			// we have a leader GO GO GO
+			if !s.isActive && !s.isDone {
+				// technically there is a race condition here. I really hope it doesn't matter.
+				s.isActive = true
+				go s.runMapReduceWorker(server)
+			}
 
 		case replication.DataReplicationRequest:
 			fmt.Printf("Outdated term request from from %d with term %d\n", smsg.SenderId, smsg.Term)
@@ -207,16 +207,16 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 		case mapreduce.GetTaskArgs:
 			// should only recieve this if leader
 			if s.raft.Role == raft.RoleLeader {
-				// if s.tracker == nil {
-				// 	s.tracker = mapreduce.MakeMaster(FILES[:], 8)
-				// }
-				// reply := mapreduce.GetTaskReply{}
-				// if err := s.tracker.GetTask(smsg, &reply); err != nil {
-				// 	reply.NoTasks = true
-				// } else {
-				// 	reply.NoTasks = false
-				// }
-				// shared.SendMessage(server, smsg.SenderId, reply)
+				if s.tracker == nil {
+					s.tracker = mapreduce.MakeMaster(FILES[:], 8)
+				}
+				reply := mapreduce.GetTaskReply{}
+				if err := s.tracker.GetTask(smsg, &reply); err != nil {
+					reply.NoTasks = true
+				} else {
+					reply.NoTasks = false
+				}
+				shared.SendMessage(server, smsg.SenderId, reply)
 			}
 
 		case mapreduce.ReportTaskArgs:
