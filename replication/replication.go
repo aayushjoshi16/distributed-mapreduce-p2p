@@ -35,7 +35,7 @@ type DataReplicationRequest struct {
 // Struct to return data
 type DataReplicationResponse struct {
 	Timestamp 	time.Time
-	SenderId 	int			// Node that is sending the data
+	SenderId 	int				// Node that is sending the data
 	StartDataId int
 	EndDataId   int
 	Data     	[]DataItem
@@ -44,14 +44,13 @@ type DataReplicationResponse struct {
 // Struct to track dat replication task
 type DataReplicationTask struct {
 	Timestamp 	time.Time
-	// SenderId 	int			// Node that is sending the data
 	NodeId      int				// Node that is outdated and receiving the data
 	StartDataId int
 	EndDataId   int
 }
 
 
-// Function used by the leader to assign data for replication to other nodes
+// Leader: Function used by the leader to assign data for replication to other nodes
 func (d *DataReplicationState) AssignData(server *rpc.Client, args DataReplicationRequest) error {
 	// Check if the args is not outdated
 	if time.Since(args.Timestamp).Seconds() > 2.0 {
@@ -62,7 +61,6 @@ func (d *DataReplicationState) AssignData(server *rpc.Client, args DataReplicati
 		d.NodeId, args.SenderId, args.StartDataId, args.EndDataId)
 
 	// We need to determine how many data items we're distributing
-	// Assuming the current node (leader) has the most up-to-date data
 	if d.DataId <= args.EndDataId {
 		fmt.Printf("No new data to replicate. Current data ID: %d, Requested last data ID: %d\n", 
 			d.DataId, args.EndDataId)
@@ -108,7 +106,6 @@ func (d *DataReplicationState) AssignData(server *rpc.Client, args DataReplicati
 		}
 	}
 
-	// Use up to 6 nodes for replication tasks
 	numNodes := len(availableNodes)
 	if numNodes > 6 {
 		numNodes = 6
@@ -140,25 +137,22 @@ func (d *DataReplicationState) AssignData(server *rpc.Client, args DataReplicati
 		
 		taskArgs := DataReplicationTask{
 			Timestamp:  time.Now(),
-			NodeId:     args.SenderId,      // Node that will receive the data
+			NodeId:     args.SenderId,
 			StartDataId: startId,
 			EndDataId:   endId,
 		}
 		
-		fmt.Printf("Assigning task to node %d: replicate data from %d to %d for node %d\n", 
+		fmt.Printf("Assigning task to node %d: replicate data [%d, %d] for node %d\n", 
 			availableNodes[i], startId, endId, args.SenderId)
 		
-		// Send task to the node
 		shared.SendMessage(server, availableNodes[i], taskArgs)
-		
-		// Update startId for the next node
 		startId = endId + 1
 	}
 
 	return nil
 }
 
-// Function to broadcast data updates to all nodes to keep populating data to replicate in the system
+// Leader: Function to broadcast data updates to all nodes to keep populating data to replicate in the system
 func (d *DataReplicationState) BroadcastData(server *rpc.Client, args DataReplicationRequest) error {
 	reply := DataReplicationResponse{
 		SenderId:  d.NodeId,
@@ -176,7 +170,6 @@ func (d *DataReplicationState) BroadcastData(server *rpc.Client, args DataReplic
 		return nil
 	}
 
-	// Convert data from any type to []DataItem
 	dataItems := []DataItem{{Id: args.EndDataId + 1, Value: data.([]string)[0]}}
 	reply.Data = dataItems
 	reply.Timestamp = time.Now()
@@ -199,7 +192,13 @@ func (d *DataReplicationState) BroadcastData(server *rpc.Client, args DataReplic
 	}
 	d.insertDataItemSorted(dataEntry)
 
-	// Broadcast next data entry after some time
+	// Start the leader's periodic data dump if not already started
+	if !d.CheckAndDumpFlag {
+		d.CheckAndDumpFlag = true
+		go d.CheckAndDump(server, d.NodeId)
+	}
+
+	// Schedule next broadcast
 	time.AfterFunc(2 * time.Second, func() {
 		newArgs := DataReplicationRequest{
 			Timestamp:  time.Now(),
@@ -213,7 +212,7 @@ func (d *DataReplicationState) BroadcastData(server *rpc.Client, args DataReplic
 	return nil
 }
 
-// Function to send data to all nodes
+// Worker: Function to send data to all nodes
 func (d *DataReplicationState) SendData(server *rpc.Client, args DataReplicationTask) error {
 	// Check if the args is not outdated
 	if time.Since(args.Timestamp).Seconds() > 2.0 {
@@ -227,9 +226,6 @@ func (d *DataReplicationState) SendData(server *rpc.Client, args DataReplication
 	}
 	fmt.Printf("Node %d: Sending data to %d from ID %d to %d\n", d.NodeId, args.NodeId, args.StartDataId, args.EndDataId)
 
-	// Prepare the response with the data to be sent
-	reply.Timestamp = time.Now()
-	
 	// First check if the data is available in memory
 	if args.StartDataId >= 1 && args.EndDataId >= args.StartDataId && args.EndDataId <= d.DataId {
 		// Try to get data from in-memory items first
@@ -250,7 +246,7 @@ func (d *DataReplicationState) SendData(server *rpc.Client, args DataReplication
 		}
 	}
 	
-	// If we couldn't get the data from memory, try reading from file
+	// Read the file if the data is not found in memory
 	if len(reply.Data) == 0 {
 		fmt.Printf("Node %d: Reading from file for range [%d, %d]\n", d.NodeId, args.StartDataId, args.EndDataId)
 		fileData, err := d.ReadDataById(args.StartDataId, args.EndDataId)
@@ -258,28 +254,25 @@ func (d *DataReplicationState) SendData(server *rpc.Client, args DataReplication
 			reply.Data = fileData
 			fmt.Printf("Node %d: Found %d items in file\n", d.NodeId, len(fileData))
 		} else {
-			fmt.Printf("Node %d: No data found in file: %v\n", d.NodeId, err)
 			return fmt.Errorf("no data found in the specified range: startId %d, endId %d", args.StartDataId, args.EndDataId)
 		}
 	}
 	
-	// If we don't have data, return an error
+	// Return an error if no data was found
 	if len(reply.Data) == 0 {
-		fmt.Printf("No data found in the specified range: startId %d, endId %d\n", args.StartDataId, args.EndDataId)
 		return fmt.Errorf("no data found in the specified range")
 	}
 
 	// Send the data to the node
 	if args.NodeId != d.NodeId {
+		reply.Timestamp = time.Now()
 		shared.SendMessage(server, args.NodeId, reply)
-	} else {
-		fmt.Printf("Skipping sending data to self (node %d)\n", d.NodeId)
 	}
 
 	return nil
 }
 
-// Function to receive data from other nodes
+// Worker: Function to receive data from other nodes
 func (d *DataReplicationState) ReceiveData(server *rpc.Client, args DataReplicationResponse, leaderId int) error {
 	// Check if the args is not outdated
 	if time.Since(args.Timestamp).Seconds() > 2.0 {
@@ -287,6 +280,8 @@ func (d *DataReplicationState) ReceiveData(server *rpc.Client, args DataReplicat
 	}
 
 	// Turn broadcast mode off if it was on
+	// Used by the leader to prevent unnecessary broadcasts
+	// If a node receives data, then it should not broadcast (meaning its a worker node)
 	if d.BroadcastFlag {
 		d.BroadcastFlag = false
 	}
@@ -304,7 +299,6 @@ func (d *DataReplicationState) ReceiveData(server *rpc.Client, args DataReplicat
 
 			// Insert the entry in sorted order
 			d.insertDataItemSorted(dataEntry)
-			// d.PrintDataItems()
 		} else {
 			fmt.Printf("Warning: Received empty or invalid data format\n")
 		}
@@ -315,6 +309,7 @@ func (d *DataReplicationState) ReceiveData(server *rpc.Client, args DataReplicat
 		if len(args.Data) > 0 {
 			for _, dataEntry := range args.Data {
 				fmt.Printf("Data entry received: ID %d, Value: %s\n", dataEntry.Id, dataEntry.Value)
+
 				// Insert the entry in sorted order
 				d.insertDataItemSorted(dataEntry)
 			}
@@ -330,7 +325,7 @@ func (d *DataReplicationState) ReceiveData(server *rpc.Client, args DataReplicat
 		}
 		d.PrintDataItems()
 	}
-
+	
 	// Start check and dump process if the flag is not set
 	if !d.CheckAndDumpFlag {
 		d.CheckAndDumpFlag = true
@@ -340,21 +335,19 @@ func (d *DataReplicationState) ReceiveData(server *rpc.Client, args DataReplicat
 	return nil
 }
 
-// Function that checks for missing data and writes to local disk
+// Worker: Function that checks for missing data and writes to local disk
 func (d *DataReplicationState) CheckAndDump(server *rpc.Client, leaderId int) error {
 	// Check in-memory data items to check for missing data
 	fmt.Printf("Node %d: Checking for missing data...\n", d.NodeId)
-
 	missingRanges := make([][2]int, 0)
 	
 	// First check in-memory data for gaps
 	if len(d.DataItems) > 0 {
-		// If we have data in memory, check for gaps between entries
-		// Start with the first item's ID - 1 to avoid false gaps at the beginning
+		// Check for gaps between entries
 		lastSeenId := d.DataItems[0].Id - 1
 		
 		for _, item := range d.DataItems {
-			// If there's a gap between the last seen ID and current item ID
+			// Gap between the last seen ID and current item ID
 			if item.Id > lastSeenId + 1 {
 				missingRanges = append(missingRanges, [2]int{lastSeenId + 1, item.Id - 1})
 			}
@@ -367,14 +360,10 @@ func (d *DataReplicationState) CheckAndDump(server *rpc.Client, leaderId int) er
 		}
 	}
 
-	// Print missing ranges found in memory
-	fmt.Printf("Node %d: Missing data ranges found in memory:\n", d.NodeId)
-	for _, r := range missingRanges {
-		fmt.Printf("  From %d to %d\n", r[0], r[1])
-	}
-	// Check if the file exists and read data from it
-	dataMap, err := d.readDataMapFromFile()
-	if err == nil && len(dataMap) > 0 {
+	// Read data from file to check for missing ranges
+	dataMap, diskErr := d.readDataMapFromFile()
+
+	if diskErr == nil && len(dataMap) > 0 {
 		// Find the highest ID in the file
 		lastFileId := 0
 		for id := range dataMap {
@@ -385,48 +374,63 @@ func (d *DataReplicationState) CheckAndDump(server *rpc.Client, leaderId int) er
 		
 		fmt.Printf("Node %d: Last ID in file: %d\n", d.NodeId, lastFileId)
 		
-		// Check for missing IDs within the file-stored data
+		// Check for missing IDs within the local file-stored data
 		for i := 1; i <= lastFileId; i++ {
-			// If this ID doesn't exist in the map, it's missing
 			if _, exists := dataMap[i]; !exists {
 				// Find the range of consecutive missing IDs
 				startMissing := i
 				for j := i; j <= lastFileId; j++ {
 					if _, exists := dataMap[j]; exists {
 						missingRanges = append(missingRanges, [2]int{startMissing, j - 1})
-						i = j // Skip to the next potential gap
+						i = j
 						break
 					}
-					// If we reached the end with missing data, add the final range
 					if j == lastFileId {
 						missingRanges = append(missingRanges, [2]int{startMissing, lastFileId})
-						i = lastFileId // End the loop
+						i = lastFileId
 					}
 				}
 			}
 		}
 		
-		// Only check gap between file and memory if both exist
+		// Check gap between file's last entry and in-memory's first entry
 		if len(d.DataItems) > 0 {
 			firstMemoryId := d.DataItems[0].Id
 			
-			// If there's a gap between file and memory, add it to missing ranges
+			// Add it to missing ranges
 			if firstMemoryId > lastFileId + 1 {
 				fmt.Printf("Node %d: Gap detected between file (last ID: %d) and memory (first ID: %d)\n", 
 					d.NodeId, lastFileId, firstMemoryId)
 				missingRanges = append(missingRanges, [2]int{lastFileId + 1, firstMemoryId - 1})
 			}
-		}	} else if !os.IsNotExist(err) {
-		// Only report error if it's not a "file doesn't exist" error
+		}	
+	} else if !os.IsNotExist(diskErr) {
 		fileName := fmt.Sprintf("%d-replication.json", d.NodeId)
-		fmt.Printf("Node %d: Error reading data from file %s: %v\n", d.NodeId, fileName, err)
+		fmt.Printf("Node %d: Error reading data from file %s: %v\n", d.NodeId, fileName, diskErr)
+		return diskErr
 	}
 	
+	// Flag to indicate if we requested any data replication
+	dataRequested := false
+
 	// Handle missing ranges if any are found
 	if len(missingRanges) > 0 {
 		for _, r := range missingRanges {
-			fmt.Printf("Node %d: Missing data range from %d to %d\n", d.NodeId, r[0], r[1])
+			if diskErr == nil {
+				// Simple check - if first and last elements exist to avoid unnecessary requests
+				_, firstExists := dataMap[r[0]]
+				_, lastExists := dataMap[r[1]]
+				
+				if firstExists && lastExists {
+					fmt.Printf("Node %d: Elements of range [%d, %d] found in local file\n", 
+						d.NodeId, r[0], r[1])
+					continue
+				}
+			}
 			
+			fmt.Printf("Node %d: Missing data range from %d to %d\n", d.NodeId, r[0], r[1])
+			dataRequested = true
+
 			// Request data replication for the missing range
 			args := DataReplicationRequest{
 				Timestamp:   time.Now(),
@@ -436,15 +440,18 @@ func (d *DataReplicationState) CheckAndDump(server *rpc.Client, leaderId int) er
 			}
 			shared.SendMessage(server, leaderId, args)
 		}
-	} else {
-		// No missing ranges found, safe to dump data if we have enough items
-		if len(d.DataItems) >= 5 {
-			if err := d.dumpDataToFile(); err != nil {
-				fmt.Printf("Node %d: Error dumping data: %v\n", d.NodeId, err)
+	} 
+	
+	if !dataRequested && len(d.DataItems) >= 5 {
+		if err := d.dumpDataToFile(); err != nil {
+			if d.NodeId == leaderId {
+				fmt.Printf("Node %d (Leader): Error dumping data: %v\n", d.NodeId, err)
 			} else {
-				// Clear in-memory data after successful dump
-				d.DataItems = []DataItem{}
+				fmt.Printf("Node %d: Error dumping data: %v\n", d.NodeId, err)
 			}
+		} else {
+			// Clear in-memory data after successful dump
+			d.DataItems = []DataItem{}
 		}
 	}
 	
@@ -466,7 +473,6 @@ func (d *DataReplicationState) dumpDataToFile() error {
 	// First read existing data if file exists
 	existingData, err := d.readDataMapFromFile()
 	if err == nil {
-		// If we successfully read existing data, use it as base
 		dataMap = existingData
 	}
 	
@@ -475,19 +481,17 @@ func (d *DataReplicationState) dumpDataToFile() error {
 		dataMap[item.Id] = item.Value
 	}
 	
-	// Open file for writing
 	file, err := os.Create(fileName)
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %v", fileName, err)
 	}
 	defer file.Close()
 	
-	// Write data map to file as JSON
 	encoder := json.NewEncoder(file)
 	if err := encoder.Encode(dataMap); err != nil {
 		return fmt.Errorf("failed to encode data to file %s: %v", fileName, err)
 	}
-	
+
 	fmt.Printf("Node %d: Data dumped successfully to file %s (%d items)\n", 
 		d.NodeId, fileName, len(dataMap))
 	return nil
@@ -520,22 +524,18 @@ func (d *DataReplicationState) ReadDataById(startId int, endId int) ([]DataItem,
 	return data, nil
 }
 
-// Leader: Function to read data to broadcast from file
+// Leader: Function to read data to broadcast some data to replicate in this system
 func ReadDataFile(startId int, endId int) (any, error) {
-	// This function handles a special file "mr-out-final" which is not in our JSON format
-	// It still needs to read the sequential file format
 	file, err := os.Open("mr-out-final")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %v", err)
 	}
 	defer file.Close()
 	
-	// Read the file line by line
 	scanner := bufio.NewScanner(file)
 	lineNum := 1
 	var data []string
 	
-	// Collect lines from startId to endId
 	for scanner.Scan() {
 		if lineNum >= startId && lineNum <= endId {
 			line := scanner.Text()
@@ -553,11 +553,10 @@ func ReadDataFile(startId int, endId int) (any, error) {
 	return data, nil
 }
 
-// Function to insert a DataItem into DataItems in sorted order based on Id
+// Function to insert a data entry in sorted order based on Id
 func (d *DataReplicationState) insertDataItemSorted(dataEntry DataItem) {
 	insertIndex := 0
 	for i, item := range d.DataItems {
-		// Case where entry with ID already exists
 		if item.Id == dataEntry.Id {
 			d.DataItems[i] = dataEntry
 			return
@@ -566,17 +565,14 @@ func (d *DataReplicationState) insertDataItemSorted(dataEntry DataItem) {
 			insertIndex = i
 			break
 		}
-		// If we reached the end without finding a larger ID, append to the end
 		if i == len(d.DataItems) - 1 {
 			insertIndex = len(d.DataItems)
 		}
 	}
 	
-	// Special case for empty slice or when the new item should be at the end
 	if len(d.DataItems) == 0 || insertIndex == len(d.DataItems) {
 		d.DataItems = append(d.DataItems, dataEntry)
 	} else {
-		// Insert at the correct position
 		d.DataItems = append(d.DataItems[:insertIndex+1], d.DataItems[insertIndex:]...)
 		d.DataItems[insertIndex] = dataEntry
 	}
@@ -586,19 +582,16 @@ func (d *DataReplicationState) insertDataItemSorted(dataEntry DataItem) {
 func (d *DataReplicationState) readDataMapFromFile() (map[int]string, error) {
 	fileName := fmt.Sprintf("%d-replication.json", d.NodeId)
 	
-	// Check if file exists
 	if _, err := os.Stat(fileName); os.IsNotExist(err) {
 		return make(map[int]string), fmt.Errorf("file does not exist: %s", fileName)
 	}
 	
-	// Open file for reading
 	file, err := os.Open(fileName)
 	if err != nil {
 		return make(map[int]string), fmt.Errorf("failed to open file %s: %v", fileName, err)
 	}
 	defer file.Close()
 	
-	// Read data map from file
 	var dataMap map[int]string
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&dataMap); err != nil {

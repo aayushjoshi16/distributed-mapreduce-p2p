@@ -288,12 +288,6 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 		if heartbeat.Term > s.Term {
 			// Send message to the new leader for pending data replication
 			fmt.Printf("Node %d: Sending data replication request to leader %d for Term %d\n", id, heartbeat.LeaderId, heartbeat.Term)
-
-			// Read file <node_id>.replication last line to get ID
-			// Ask for pending data replication from ID + 1 to -1
-			// -1 means node doesn't know the end of data
-			
-
 			dataReplication := replication.DataReplicationRequest{
 				Timestamp: 	time.Now(),
 				SenderId:   id,
