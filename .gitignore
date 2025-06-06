@@ -5,3 +5,4 @@ tmp/
 mr-out-*
 mr-*-*
 task_log.jsonl
+*-replication.json

@@ -185,7 +185,7 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			// raft_timer.Reset(RAFT_X_TIME*time.Second + shared.RandomLeadTimeout())
 			s.raft.HandleLeaderHeartbeat(server, smsg, s.id)
 			
-			// we have a leader GO GO GO
+			// // we have a leader GO GO GO
 			// if !s.isActive && !s.isDone {
 			// 	// technically there is a race condition here. I really hope it doesn't matter.
 			// 	s.isActive = true
@@ -207,8 +207,6 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 		case mapreduce.GetTaskArgs:
 			// should only recieve this if leader
 			if s.raft.Role == raft.RoleLeader {
-				fmt.Printf("Ready to begin!\n")
-
 				// if s.tracker == nil {
 				// 	s.tracker = mapreduce.MakeMaster(FILES[:], 8)
 				// }

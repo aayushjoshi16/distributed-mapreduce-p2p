@@ -2,6 +2,7 @@ package replication
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"lab4/shared"
 	"net/rpc"
@@ -52,6 +53,11 @@ type DataReplicationTask struct {
 
 // Function used by the leader to assign data for replication to other nodes
 func (d *DataReplicationState) AssignData(server *rpc.Client, args DataReplicationRequest) error {
+	// Check if the args is not outdated
+	if time.Since(args.Timestamp).Seconds() > 2.0 {
+		return nil
+	}
+
 	fmt.Printf("Node %d: Assigning data replication tasks for node %d; range: [%d, %d]\n", 
 		d.NodeId, args.SenderId, args.StartDataId, args.EndDataId)
 
@@ -65,18 +71,22 @@ func (d *DataReplicationState) AssignData(server *rpc.Client, args DataReplicati
 
 	startId := 0
 	totalItems := 0
+	
+	// Calculate range for replication
 	if args.EndDataId < 0 && args.StartDataId < 0 {
 		// Replicate everything from the beginning
-		totalItems = len(d.DataItems)
+		totalItems = 1
+		// Start from 1 since DataId starts from 1
+		// This way the gaps between 1 and DataId will be filled in future iterations
 		startId = 1
 	} else if args.EndDataId < 0 && args.StartDataId > 0 {
 		// Replicate from the startId to the current DataId
-		totalItems = len(d.DataItems)
+		totalItems = d.DataId - args.StartDataId + 1
 		startId = args.StartDataId
 	} else if args.EndDataId > 0 && args.StartDataId > 0 {
 		// Replicate from the startId to the endId
 		totalItems = args.EndDataId - args.StartDataId + 1
-		if totalItems < 0 || totalItems > len(d.DataItems) {
+		if totalItems < 0 || totalItems > d.DataId {
 			fmt.Printf("Invalid data range provided: StartDataId %d, EndDataId %d\n",
 				args.StartDataId, args.EndDataId)
 			return fmt.Errorf("invalid data range")
@@ -217,28 +227,44 @@ func (d *DataReplicationState) SendData(server *rpc.Client, args DataReplication
 	}
 	fmt.Printf("Node %d: Sending data to %d from ID %d to %d\n", d.NodeId, args.NodeId, args.StartDataId, args.EndDataId)
 
-	// Verify data in the range of startId and endId exists in DataReplicationState
-	if args.StartDataId < 1 || args.EndDataId < args.StartDataId || args.EndDataId > d.DataId {
-		fmt.Printf("Invalid data range: startId %d, endId %d, DataId %d\n", args.StartDataId, args.EndDataId, d.DataId)
-		return fmt.Errorf("invalid data range")
-	}
-
 	// Prepare the response with the data to be sent
 	reply.Timestamp = time.Now()
-	data, err := ReadDataFile(args.StartDataId, args.EndDataId)
-	if err != nil {
-		fmt.Printf("Error reading data file: %v\n", err)
-		return err
-	}
-	if dataSlice, ok := data.([]string); ok && len(dataSlice) > 0 {
-		reply.Data = make([]DataItem, len(dataSlice))
-		for i, line := range dataSlice {
-			reply.Data[i] = DataItem{
-				Id:    args.StartDataId + i,
-				Value: line,
+	
+	// First check if the data is available in memory
+	if args.StartDataId >= 1 && args.EndDataId >= args.StartDataId && args.EndDataId <= d.DataId {
+		// Try to get data from in-memory items first
+		var inMemoryData []DataItem
+		for _, item := range d.DataItems {
+			if item.Id >= args.StartDataId && item.Id <= args.EndDataId {
+				inMemoryData = append(inMemoryData, item)
 			}
 		}
-	} else {
+		
+		// If we found all requested items in memory, use them
+		if len(inMemoryData) > 0 && inMemoryData[0].Id == args.StartDataId && 
+		   inMemoryData[len(inMemoryData)-1].Id == args.EndDataId && 
+		   len(inMemoryData) == (args.EndDataId - args.StartDataId + 1) {
+			reply.Data = inMemoryData
+			fmt.Printf("Node %d: Found complete data range [%d, %d] in memory\n", 
+				d.NodeId, args.StartDataId, args.EndDataId)
+		}
+	}
+	
+	// If we couldn't get the data from memory, try reading from file
+	if len(reply.Data) == 0 {
+		fmt.Printf("Node %d: Reading from file for range [%d, %d]\n", d.NodeId, args.StartDataId, args.EndDataId)
+		fileData, err := d.ReadDataById(args.StartDataId, args.EndDataId)
+		if err == nil && len(fileData) > 0 {
+			reply.Data = fileData
+			fmt.Printf("Node %d: Found %d items in file\n", d.NodeId, len(fileData))
+		} else {
+			fmt.Printf("Node %d: No data found in file: %v\n", d.NodeId, err)
+			return fmt.Errorf("no data found in the specified range: startId %d, endId %d", args.StartDataId, args.EndDataId)
+		}
+	}
+	
+	// If we don't have data, return an error
+	if len(reply.Data) == 0 {
 		fmt.Printf("No data found in the specified range: startId %d, endId %d\n", args.StartDataId, args.EndDataId)
 		return fmt.Errorf("no data found in the specified range")
 	}
@@ -323,7 +349,9 @@ func (d *DataReplicationState) CheckAndDump(server *rpc.Client, leaderId int) er
 	
 	// First check in-memory data for gaps
 	if len(d.DataItems) > 0 {
-		lastSeenId := 0
+		// If we have data in memory, check for gaps between entries
+		// Start with the first item's ID - 1 to avoid false gaps at the beginning
+		lastSeenId := d.DataItems[0].Id - 1
 		
 		for _, item := range d.DataItems {
 			// If there's a gap between the last seen ID and current item ID
@@ -339,56 +367,59 @@ func (d *DataReplicationState) CheckAndDump(server *rpc.Client, leaderId int) er
 		}
 	}
 
-	// Check if the file exists and read the last ID from it
-	fileName := fmt.Sprintf("%d-replication", d.NodeId)
-	lastFileId := 0
-	
-	// Try to read the last ID from the file
-	file, err := os.Open(fileName)
-	if err == nil {
-		defer file.Close()
-		
-		// Scan through the file to get the last line
-		scanner := bufio.NewScanner(file)
-		var lastLine string
-		
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line != "" {
-				lastLine = line
-			}
-		}
-		
-		// Parse the last line to get the ID
-		if lastLine != "" {
-			var id int
-			_, err := fmt.Sscanf(lastLine, "ID: %d,", &id)
-			if err == nil {
-				lastFileId = id
-				fmt.Printf("Node %d: Last ID in file: %d\n", d.NodeId, lastFileId)
-			} else {
-				fmt.Printf("Node %d: Error parsing last line ID: %v\n", d.NodeId, err)
-			}
-		}
-		
-		if err := scanner.Err(); err != nil {
-			fmt.Printf("Node %d: Error reading file: %v\n", d.NodeId, err)
-		}
-	} else if !os.IsNotExist(err) {
-		// Only report error if it's not a "file doesn't exist" error
-		fmt.Printf("Node %d: Error opening file: %v\n", d.NodeId, err)
+	// Print missing ranges found in memory
+	fmt.Printf("Node %d: Missing data ranges found in memory:\n", d.NodeId)
+	for _, r := range missingRanges {
+		fmt.Printf("  From %d to %d\n", r[0], r[1])
 	}
-	
-	// Check for gap between file and in-memory data
-	if len(d.DataItems) > 0 && lastFileId > 0 {
-		firstMemoryId := d.DataItems[0].Id
-		
-		// If there's a gap between file and memory, add it to missing ranges
-		if firstMemoryId > lastFileId + 1 {
-			fmt.Printf("Node %d: Gap detected between file (last ID: %d) and memory (first ID: %d)\n", 
-				d.NodeId, lastFileId, firstMemoryId)
-			missingRanges = append(missingRanges, [2]int{lastFileId + 1, firstMemoryId - 1})
+	// Check if the file exists and read data from it
+	dataMap, err := d.readDataMapFromFile()
+	if err == nil && len(dataMap) > 0 {
+		// Find the highest ID in the file
+		lastFileId := 0
+		for id := range dataMap {
+			if id > lastFileId {
+				lastFileId = id
+			}
 		}
+		
+		fmt.Printf("Node %d: Last ID in file: %d\n", d.NodeId, lastFileId)
+		
+		// Check for missing IDs within the file-stored data
+		for i := 1; i <= lastFileId; i++ {
+			// If this ID doesn't exist in the map, it's missing
+			if _, exists := dataMap[i]; !exists {
+				// Find the range of consecutive missing IDs
+				startMissing := i
+				for j := i; j <= lastFileId; j++ {
+					if _, exists := dataMap[j]; exists {
+						missingRanges = append(missingRanges, [2]int{startMissing, j - 1})
+						i = j // Skip to the next potential gap
+						break
+					}
+					// If we reached the end with missing data, add the final range
+					if j == lastFileId {
+						missingRanges = append(missingRanges, [2]int{startMissing, lastFileId})
+						i = lastFileId // End the loop
+					}
+				}
+			}
+		}
+		
+		// Only check gap between file and memory if both exist
+		if len(d.DataItems) > 0 {
+			firstMemoryId := d.DataItems[0].Id
+			
+			// If there's a gap between file and memory, add it to missing ranges
+			if firstMemoryId > lastFileId + 1 {
+				fmt.Printf("Node %d: Gap detected between file (last ID: %d) and memory (first ID: %d)\n", 
+					d.NodeId, lastFileId, firstMemoryId)
+				missingRanges = append(missingRanges, [2]int{lastFileId + 1, firstMemoryId - 1})
+			}
+		}	} else if !os.IsNotExist(err) {
+		// Only report error if it's not a "file doesn't exist" error
+		fileName := fmt.Sprintf("%d-replication.json", d.NodeId)
+		fmt.Printf("Node %d: Error reading data from file %s: %v\n", d.NodeId, fileName, err)
 	}
 	
 	// Handle missing ranges if any are found
@@ -427,30 +458,72 @@ func (d *DataReplicationState) CheckAndDump(server *rpc.Client, leaderId int) er
 
 // Helper method to dump data to file
 func (d *DataReplicationState) dumpDataToFile() error {
-	fileName := fmt.Sprintf("%d-replication", d.NodeId)
-	file, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	fileName := fmt.Sprintf("%d-replication.json", d.NodeId)
+	
+	// Create a map with data items where the key is the ID
+	dataMap := make(map[int]string)
+	
+	// First read existing data if file exists
+	existingData, err := d.readDataMapFromFile()
+	if err == nil {
+		// If we successfully read existing data, use it as base
+		dataMap = existingData
+	}
+	
+	// Add or update with new data items
+	for _, item := range d.DataItems {
+		dataMap[item.Id] = item.Value
+	}
+	
+	// Open file for writing
+	file, err := os.Create(fileName)
 	if err != nil {
-		return fmt.Errorf("failed to open file %s: %v", fileName, err)
+		return fmt.Errorf("failed to create file %s: %v", fileName, err)
 	}
 	defer file.Close()
 	
-	// Write data items to file
-	for _, item := range d.DataItems {
-		// Write both ID and value to keep track of IDs in the file
-		line := fmt.Sprintf("ID: %d, Value: %s\n", item.Id, item.Value)
-		if _, err := file.WriteString(line); err != nil {
-			return fmt.Errorf("failed to write to file %s: %v", fileName, err)
-		}
+	// Write data map to file as JSON
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(dataMap); err != nil {
+		return fmt.Errorf("failed to encode data to file %s: %v", fileName, err)
 	}
 	
 	fmt.Printf("Node %d: Data dumped successfully to file %s (%d items)\n", 
-		d.NodeId, fileName, len(d.DataItems))
+		d.NodeId, fileName, len(dataMap))
 	return nil
 }
 
-// Function to read data from file
+// Worker: Function to read data between a given range from the local disk file
+func (d *DataReplicationState) ReadDataById(startId int, endId int) ([]DataItem, error) {
+	// Read data map from file
+	dataMap, err := d.readDataMapFromFile()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data map from file: %v", err)
+	}
+	
+	// Extract data items within the specified range
+	var data []DataItem
+	for id, value := range dataMap {
+		if id >= startId && id <= endId {
+			data = append(data, DataItem{
+				Id:    id,
+				Value: value,
+			})
+		}
+	}
+	
+	// Check if we found any data
+	if len(data) == 0 {
+		return nil, fmt.Errorf("no data found in the specified range: startId %d, endId %d", startId, endId)
+	}
+	
+	return data, nil
+}
+
+// Leader: Function to read data to broadcast from file
 func ReadDataFile(startId int, endId int) (any, error) {
-	// Open the file
+	// This function handles a special file "mr-out-final" which is not in our JSON format
+	// It still needs to read the sequential file format
 	file, err := os.Open("mr-out-final")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %v", err)
@@ -507,6 +580,32 @@ func (d *DataReplicationState) insertDataItemSorted(dataEntry DataItem) {
 		d.DataItems = append(d.DataItems[:insertIndex+1], d.DataItems[insertIndex:]...)
 		d.DataItems[insertIndex] = dataEntry
 	}
+}
+
+// Helper method to read data map from file
+func (d *DataReplicationState) readDataMapFromFile() (map[int]string, error) {
+	fileName := fmt.Sprintf("%d-replication.json", d.NodeId)
+	
+	// Check if file exists
+	if _, err := os.Stat(fileName); os.IsNotExist(err) {
+		return make(map[int]string), fmt.Errorf("file does not exist: %s", fileName)
+	}
+	
+	// Open file for reading
+	file, err := os.Open(fileName)
+	if err != nil {
+		return make(map[int]string), fmt.Errorf("failed to open file %s: %v", fileName, err)
+	}
+	defer file.Close()
+	
+	// Read data map from file
+	var dataMap map[int]string
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&dataMap); err != nil {
+		return make(map[int]string), fmt.Errorf("failed to decode data from file %s: %v", fileName, err)
+	}
+	
+	return dataMap, nil
 }
 
 // Function to print DataItems array
