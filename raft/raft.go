@@ -292,7 +292,8 @@ func (s *RaftState) HandleLeaderHeartbeat(server *rpc.Client, heartbeat shared.L
 				Timestamp: 	time.Now(),
 				SenderId:   id,
 				Term: 		s.Term,
-				LastDataId: 0,	 		// 0 meaning no data is with this node
+				StartDataId: -1,	 		// -1 meaning node doesn't know starting of data
+				EndDataId: -1,			// -1 meaning node doesn't know ending of data
 			}
 			shared.SendMessage(server, heartbeat.LeaderId, dataReplication)
 

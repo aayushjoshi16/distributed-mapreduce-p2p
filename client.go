@@ -85,7 +85,8 @@ func NewState(id int, self_node gossip.Node, server *rpc.Client) ClientState {
 		replication: &replication.DataReplicationState{
 			NodeId:    id,
 			DataId:    0,
-			Broadcast: false,
+			BroadcastFlag: false,
+			CheckAndDumpFlag: false,
 		},
 	}
 }
@@ -161,13 +162,13 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 	detectFailures(&s.membership)
 
 	// If the node is leader, start broadcasting data
-	if s.raft.Role == raft.RoleLeader && !s.replication.Broadcast {
-		s.replication.Broadcast = true
+	if s.raft.Role == raft.RoleLeader && !s.replication.BroadcastFlag {
+		s.replication.BroadcastFlag = true
 		go s.replication.BroadcastData(server, replication.DataReplicationRequest{
 			Timestamp:  time.Now(),
 			Term:       s.raft.Term,
 			SenderId:   s.id,
-			LastDataId: s.replication.DataId,
+			EndDataId: s.replication.DataId,
 		})
 	}
 
@@ -196,7 +197,9 @@ func (s *ClientState) handlePoll(server *rpc.Client) {
 			s.replication.AssignData(server, smsg)
 
 		case replication.DataReplicationResponse:
-			s.replication.ReceiveData(smsg)
+			if s.raft.GetLeader() != nil {
+				s.replication.ReceiveData(server, smsg, *s.raft.GetLeader())
+			}
 
 		case replication.DataReplicationTask:
 			s.replication.SendData(server, smsg)
