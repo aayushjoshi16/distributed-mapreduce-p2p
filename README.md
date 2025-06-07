@@ -1,6 +1,6 @@
-# Lab 4
+# Final Project
 
-Aayush, Ben, Gabe, Tymon
+Aayush, Gabe, Tymon
 
 ## Demo
 
